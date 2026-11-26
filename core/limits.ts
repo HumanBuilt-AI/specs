@@ -17,6 +17,12 @@ export const LIMITS = {
   urlCount: 1,
   urlChars: 2048,
   logoCount: 1,
+  /** Font files (Scott, Nov 26): a headline face and a body face, plus one spare. Posts use them as uploaded. */
+  fontCount: 3,
+  fontBytes: 2 * 1024 * 1024,
+  /** Text files (.txt, .md, .json, .css): read like pasted text, each up to the paste box's size. */
+  docCount: 4,
+  docChars: 8000,
   /** The note field on the upload screen ("we're a family bakery, 30 years in Calumet"). */
   noteCount: 1,
   /** The paste box, the fallback when a website can't be fetched. Not in the spec's table; about 2,000 tokens. */

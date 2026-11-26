@@ -13,6 +13,7 @@ import { escapeHtml, findTemplate, parseTemplates, type TemplateId } from "../..
 import type { PropsOf } from "../../core/catalog.ts";
 import { call, callAgainIfDropped, isDropped, type ApiError } from "../lib/api.ts";
 import { PostPreview } from "../ui/catalog/PostPreview.tsx";
+import { withFontFiles } from "../lib/fonts.ts";
 import { logoDataUrl } from "../lib/logo.ts";
 import { KitDownload } from "../ui/KitDownload.tsx";
 import { Working } from "../ui/working.tsx";
@@ -32,6 +33,7 @@ type Kit = {
   neutralTokensCss: string;
   photos: { file: string; uploadId?: string }[];
   logoUploadId: string | null;
+  fontFiles?: { uploadId: string; family: string; ext: "ttf" | "otf" | "woff" | "woff2" }[];
 };
 type Slots = Record<string, string | null>;
 type Post = {
@@ -92,7 +94,7 @@ export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: st
   const loadKit = useCallback(async () => {
     setKitError(null);
     try {
-      const k = await call<Kit>("/api/kit/files", { sessionId });
+      const k = await withFontFiles(sessionId, await call<Kit>("/api/kit/files", { sessionId }));
       setKit(k);
       // Photos go into each post as data URLs, so the PNG export carries them too.
       const urls: Record<string, string> = {};

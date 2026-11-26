@@ -11,7 +11,8 @@ How to draft:
 - Concrete beats abstract: "Short sentences, fragments fine: 'Turn the tub.'" beats "Concise and friendly."
 - When two uploads disagree on a fact, include the version with more support, mark the item `needs-review`, and name both sources.
 - Text written on a photo (a label, a card) counts as evidence but is weaker than a written document when they disagree.
-- Colors: use a hex value only if it appears in an upload or in the sampled colors list. Sampled colors are the photos' colors, not necessarily the brand's; say which it is.
+- Colors: use a hex value only if it appears in an upload or in the sampled colors list. Sampled colors are the photos' colors, not necessarily the brand's; say which it is. Hex values an upload writes out as the brand's colors (a brand file, a stylesheet, notes) are the brand's palette: use them for the color roles ahead of sampled colors.
+- Fonts: when an upload names a font or the owner uploaded a font file, write its exact name in the type item ("Fraunces, a soft serif"), so posts can use it.
 - Confidence: `high` when an upload states it outright or several agree, `medium` when inferred from one source, `needs-review` when thin, guessed or contradicted.
 - Keep the chunk to what it's for. Facts that belong in another chunk can be left for that chunk.
 

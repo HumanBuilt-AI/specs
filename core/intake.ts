@@ -6,6 +6,7 @@
 // items, nothing is still marked needs-review, and every conflict between uploads has an answer
 // (or was settled from the uploads, or skipped). Which gaps get asked is decided in code too
 // (core/triage.ts); the model only chooses how to ask.
+import { ownerFonts } from "./session-kit.ts";
 import { z } from "zod";
 import type { ComponentName, ParsedCall } from "./catalog.ts";
 import { sizePercent, sliderForPercent } from "./catalog.ts";
@@ -152,7 +153,7 @@ export function requestGap(id: string, chunk: ExtractChunkId, about: string, com
 
 export function changePrompt(
   promptText: string,
-  input: { chunks: IntakeChunks; transcript: Transcript; photos: string[]; sampled: { upload: string; colors: string[] }[]; fonts: readonly string[]; message: string },
+  input: { chunks: IntakeChunks; transcript: Transcript; photos: string[]; sampled: { upload: string; colors: string[] }[]; fonts: readonly string[]; message: string; postsUse?: string },
 ) {
   const d = asData;
   const summaries = EXTRACT_CHUNKS.map(({ id }) => {
@@ -168,8 +169,33 @@ export function changePrompt(
     photos: input.photos.map((p) => `- ${d(p)}`).join("\n") || "- none uploaded",
     colors: input.sampled.map((s) => `- ${d(s.upload)}: ${s.colors.join(", ")}`).join("\n") || "- no photos",
     fonts: input.fonts.join(", "),
+    posts_use: input.postsUse ?? "- not built yet",
     owner_message: d(input.message),
   });
+}
+
+/** What posts are made with right now, in plain words, so the chat answers "what fonts?" with names. */
+export function postsUseText(kit: { colors: { background: string; text: string; heading: string; accent: string; accent2: string | null }; fonts: { heading: string; body: string }; notes: string[] }): string {
+  const c = kit.colors;
+  return [
+    `- Headline font: ${kit.fonts.heading}`,
+    `- Body font: ${kit.fonts.body}`,
+    `- Colors: background ${c.background}, body text ${c.text}, headlines ${c.heading}, accent ${c.accent}${c.accent2 ? `, second accent ${c.accent2}` : ""}`,
+    ...kit.notes.map((n) => `- Note: ${asData(n)}`),
+  ].join("\n");
+}
+
+/**
+ * A font card from the chat always offers the fonts the owner named, exactly, as its first option:
+ * any Google font works (Scott, Nov 26). Named fonts that aren't Google fonts are left to the model's options.
+ */
+export function withOwnerFonts(options: { id: string; display: string; body: string; note?: string; sample?: string }[], message: string, current: { heading: string; body: string }) {
+  const named = ownerFonts(message);
+  if (!named.heading && !named.body) return options;
+  const display = named.heading ?? current.heading;
+  const body = named.body ?? current.body;
+  const rest = options.filter((o) => !(o.display === display && o.body === body));
+  return [{ id: "yours", display, body, note: "The fonts you named" }, ...rest].slice(0, 3);
 }
 
 /** The model's component call as plain data, ready for parseCall. Bad JSON comes back as an error. */

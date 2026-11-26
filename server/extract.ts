@@ -44,7 +44,7 @@ export const evidenceKey = (sid: string, uploadId: string) => `extract/${sid}/ev
 export { chunkKey } from "./kit-chunks.ts";
 import { chunkKey } from "./kit-chunks.ts";
 
-const KIND: Record<UploadRecord["kind"], UploadKind> = { image: "photo", logo: "logo", pdf: "pdf", url: "url", pasted: "pasted", note: "note" };
+const KIND: Record<UploadRecord["kind"], UploadKind> = { image: "photo", logo: "logo", pdf: "pdf", url: "url", pasted: "pasted", note: "note", doc: "doc", font: "font" };
 const emptyExtraction = (): ExtractionState => ({ locked: false, reads: {}, targets: {} });
 
 // ---------- claiming a call ----------
@@ -120,7 +120,8 @@ export async function readUpload(req: Request, deps: Deps) {
     const bytes = up.kind === "url" ? null : await deps.kv.getBytes(`upload/${body.sessionId}/${up.id}`);
     if (up.kind !== "url" && !bytes) throw new Refusal(404, "no_upload", "That upload's file is missing. Upload it again.");
 
-    const text = up.kind === "pasted" || up.kind === "note" ? new TextDecoder().decode(bytes!) : undefined;
+    if (up.kind === "font") throw new Refusal(400, "not_read", "Font files aren't read; posts use them as they are.");
+    const text = up.kind === "pasted" || up.kind === "note" || up.kind === "doc" ? new TextDecoder().decode(bytes!) : undefined;
     const prompt = readPrompt(CONTENT.prompts.read, { label: up.label ?? kind, kind, text, url: up.url });
     const images: Image[] = up.kind === "image" || up.kind === "logo" ? [{ mediaType: up.mediaType as Image["mediaType"], base64: base64(bytes!) }] : [];
     const documents = up.kind === "pdf" ? [{ base64: base64(bytes!) }] : [];
@@ -146,6 +147,11 @@ const AssembleBody = z.strictObject({ sessionId: id, target: z.enum(ASSEMBLE_TAR
 async function loadEvidence(deps: Deps, s: Session) {
   const notes: EvidenceRecord[] = [];
   for (const u of s.uploads) {
+    // A font file isn't read by the model; it's evidence of the brand's type all the same.
+    if (u.kind === "font" && u.family) {
+      notes.push({ uploadId: u.id, upload: u.label ?? "font", kind: "font", evidence: { summary: `A font file the owner uploaded: ${u.family}.`, facts: [{ topic: "visual", statement: `The brand uses the font ${u.family}; the owner uploaded its file.`, quote: null, location: "font file" }], lines: [] } });
+      continue;
+    }
     if (s.extraction?.reads[u.id]?.status !== "done") continue;
     const rec = (await deps.kv.get<EvidenceRecord>(evidenceKey(s.id, u.id)))?.value;
     if (rec) notes.push(rec);
@@ -165,7 +171,7 @@ export async function assemble(req: Request, deps: Deps) {
     targets,
     body.target,
     (s) => {
-      const states = s.uploads.map((u) => s.extraction?.reads[u.id]?.status);
+      const states = s.uploads.filter((u) => u.kind !== "font").map((u) => s.extraction?.reads[u.id]?.status);
       if (states.includes("running")) throw new Refusal(409, "reads_running", "Wait until every upload has been read.");
       if (!states.includes("done")) throw new Refusal(409, "nothing_read", "Read at least one upload first.");
     },

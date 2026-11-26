@@ -15,7 +15,7 @@ type Find =
   | { key: string; kind: "line"; text: string; from: string }
   | { key: string; kind: "fact"; text: string; topic: string; from: string };
 
-const GLYPH: Record<string, string> = { pdf: "PDF", url: "WWW", pasted: "TXT", note: "NOTE" };
+const GLYPH: Record<string, string> = { pdf: "PDF", url: "WWW", pasted: "TXT", note: "NOTE", doc: "TXT", font: "Aa" };
 const FACT_TOPICS = ["offer", "business", "visual", "audience", "photo"];
 const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
 
@@ -39,7 +39,9 @@ export function ReadingFinds(props: {
   drafting: number;
   draftTotal: number;
 }) {
-  const { uploads, reads, evidence, thumbs, drafting, draftTotal } = props;
+  const { reads, evidence, thumbs, drafting, draftTotal } = props;
+  // Font files aren't read, so they don't count toward "Reading 3 of 6".
+  const uploads = props.uploads.filter((u) => u.kind !== "font");
   // Interleave uploads so the table fills from every file, not one file at a time.
   const finds = useMemo(() => {
     const per = uploads.map((u) => findsOf(u, evidence[u.id]));

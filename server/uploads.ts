@@ -4,6 +4,7 @@ import "server-only";
 import { PDFDocument } from "pdf-lib";
 import { LIMITS, charCount } from "../core/limits.ts";
 import { Refusal } from "./http.ts";
+import { fontFamilyFromFile, sniffFont, type FontExt } from "../core/fonts.ts";
 
 export type ImageType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 
@@ -26,6 +27,30 @@ export async function checkImage(file: File): Promise<{ mediaType: ImageType; by
   const mediaType = sniffImage(head);
   if (!mediaType) throw new Refusal(415, "image_type", "Photos must be JPEG, PNG, GIF or WebP.");
   return { mediaType, bytes: file.size };
+}
+
+/** A font file: judged by its first bytes, its family read from the file name. */
+export async function checkFont(file: File): Promise<{ bytes: number; family: string; fontExt: FontExt }> {
+  if (file.size > LIMITS.fontBytes) throw new Refusal(413, "font_too_large", `Font files are capped at ${mb(LIMITS.fontBytes)} each; this one is ${mb(file.size)}.`);
+  const fontExt = sniffFont(new Uint8Array(await file.slice(0, 8).arrayBuffer()));
+  if (!fontExt) throw new Refusal(415, "font_type", "Fonts must be TTF, OTF, WOFF or WOFF2 files.");
+  return { bytes: file.size, family: fontFamilyFromFile(file.name), fontExt };
+}
+
+/** A text file (.txt, .md, .json, .css): plain UTF-8 text, read like pasted text. */
+export async function checkDoc(file: File): Promise<{ bytes: number; chars: number; text: string }> {
+  if (file.size > LIMITS.docChars * 4) throw new Refusal(413, "doc_too_large", `Text files are capped at ${LIMITS.docChars} characters each.`);
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+  } catch {
+    throw new Refusal(415, "doc_type", "That file isn't plain text. Text files must be .txt, .md, .json or .css.");
+  }
+  if (text.includes("\u0000")) throw new Refusal(415, "doc_type", "That file isn't plain text. Text files must be .txt, .md, .json or .css.");
+  const chars = charCount(text);
+  if (chars > LIMITS.docChars) throw new Refusal(413, "doc_too_long", `Text files are capped at ${LIMITS.docChars} characters each; this one has ${chars}.`);
+  if (!text.trim()) throw new Refusal(400, "doc_empty", "That text file is empty.");
+  return { bytes: file.size, chars, text };
 }
 
 export async function checkPdf(file: File): Promise<{ bytes: number; pages: number }> {

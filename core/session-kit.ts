@@ -3,10 +3,11 @@
 // rules. Pure: no file access, so the server, the spike and the tests share it.
 //
 // Colors and fonts come only from the kit. Colors: the visual-system items by role, or the
-// owner's palette answer. Fonts: the named font if it's in the curated free set (so posts render
-// exactly), otherwise the closest curated face by style, noted in the readme. Text colors that
+// owner's palette answer. Fonts: the owner's answer, then any font files they uploaded, then a
+// Google font the kit names (posts load it by name, so it renders exactly), otherwise the closest
+// curated face by style, noted in the readme (core/fonts.ts). Text colors that
 // fail contrast fall back to near-black or white, because a post you can't read helps no one.
-import { CURATED_FONTS } from "./catalog.ts";
+import { fontsNamedIn, googleFont, googleFontsHref as hrefFor, headingWeightOf, resolveFont, type ResolvedFont } from "./fonts.ts";
 import { EXTRACT_CHUNKS, renderChunk, type ExtractChunkId } from "./extract.ts";
 import type { IntakeChunks, IntakeItem } from "./intake.ts";
 
@@ -98,49 +99,74 @@ function pickColors(items: IntakeItem[], notes: string[]) {
 
 // ---------- fonts ----------
 
-const SCRIPT_FONTS = new Set<string>(["Caveat"]);
+/** A font file the owner uploaded: its family, and whether Google serves it too (then posts load it from Google). */
+export type UploadedFont = { family: string; google: boolean };
 
-type Curated = (typeof CURATED_FONTS)[number];
-const STYLE_STAND_INS: [RegExp, Curated][] = [
-  [/script|hand|brush|marker|written/i, "Caveat"],
-  [/condensed|poster|impact|black|heavy|display sans|block/i, "Archivo Black"],
-  [/didone|high.contrast|fashion|editorial serif/i, "Playfair Display"],
-  [/old.?style|garamond|book|classic serif|humanist serif/i, "Lora"],
-  [/serif|slab|soft serif/i, "Fraunces"],
-  [/geometric|grotesk|grotesque/i, "Space Grotesk"],
-  [/mono|typewriter/i, "IBM Plex Sans"],
-];
-
-/** The curated font for a font name or description, and whether it's a stand-in. */
-export function curatedFont(raw: string | undefined, fallback: Curated): { font: Curated; standIn: boolean } {
-  if (!raw) return { font: fallback, standIn: false };
-  const named = [...CURATED_FONTS].sort((a, b) => b.length - a.length).find((f) => raw.toLowerCase().includes(f.toLowerCase()));
-  if (named) return { font: named, standIn: false };
-  const styled = STYLE_STAND_INS.find(([re]) => re.test(raw.replace(/sans.?serif/gi, "sans")))?.[1];
-  return { font: styled ?? fallback, standIn: true };
+/**
+ * The owner's own font answer as heading and body, from a card pick ("Fonts: Fraunces for headings,
+ * Inter for body text") or typed words naming Google fonts ("Fraunces for headlines and Plus
+ * Jakarta Sans for body"). A lone sans-serif is the body font; anything else leads.
+ */
+export function ownerFonts(value: string): { heading?: string; body?: string } {
+  const pair = value.match(/Fonts:\s*(.+?) for headings, (.+?) for body/i);
+  if (pair) return { heading: resolveFont(pair[1], "Fraunces").font, body: resolveFont(pair[2], "Inter").font };
+  const named = fontsNamedIn(value);
+  if (!named.length) return {};
+  if (named.length >= 2) {
+    // "Inter for body and Fraunces for headlines": follow the words when they say which is which.
+    const bodyFirst = new RegExp(`${named[0]!.family}[^.,;]{0,20}\\b(body|text|paragraph)`, "i").test(value) || new RegExp(`(head|title|display)[^.,;]{0,30}${named[1]!.family}`, "i").test(value);
+    const [h, b] = bodyFirst ? [named[1]!, named[0]!] : [named[0]!, named[1]!];
+    return { heading: h.family, body: b.family };
+  }
+  const only = named[0]!;
+  const saysBody = /\b(body|paragraph|text font|small text)\b/i.test(value);
+  const saysHead = /\b(head(line|ing)s?|titles?|display|wordmark)\b/i.test(value);
+  if (saysBody && !saysHead) return { body: only.family };
+  if (saysHead && !saysBody) return { heading: only.family };
+  return only.category === "sans-serif" || only.category === "monospace" ? { body: only.family } : { heading: only.family };
 }
 
-function pickFonts(items: IntakeItem[], notes: string[]) {
-  const pair = lastItem(items, "fonts")?.value.match(/Fonts:\s*(.+?) for headings, (.+?) for body/i);
-  const heading = curatedFont(pair?.[1] ?? lastItem(items, "type: heading")?.value, "Fraunces");
-  let body = curatedFont(pair?.[2] ?? lastItem(items, "type: body")?.value, "Inter");
+function pickFonts(items: IntakeItem[], notes: string[], uploaded: UploadedFont[] = []) {
+  // The owner's answers, latest last; a later answer that names only one role keeps the other.
+  const answers = items.filter((i) => i.label.toLowerCase().trim().startsWith("fonts")).map((i) => ownerFonts(i.value));
+  const owner = answers.reduce<{ heading?: string; body?: string }>((acc, a) => ({ ...acc, ...Object.fromEntries(Object.entries(a).filter(([, v]) => v)) }), {});
+  // Uploaded font files come next: a serif or display face leads, a sans sets the body.
+  const files = uploaded.map((u) => ({ ...u, category: googleFont(u.family)?.category ?? null }));
+  const fileHeading = files.find((f) => f.category && f.category !== "sans-serif" && f.category !== "monospace") ?? (files.length >= 2 ? files[0] : files.find((f) => !f.category));
+  const fileBody = files.find((f) => f !== fileHeading && (f.category === "sans-serif" || f.category === "monospace" || !f.category)) ?? files.find((f) => f !== fileHeading);
+  const headingText = lastItem(items, "type: heading")?.value;
+  const bodyText = lastItem(items, "type: body")?.value;
+
+  const heading: ResolvedFont = owner.heading
+    ? { font: owner.heading, standIn: false, category: googleFont(owner.heading)?.category ?? "serif" }
+    : fileHeading
+      ? { font: fileHeading.family, standIn: false, category: fileHeading.category ?? "serif" }
+      : resolveFont(headingText, "Fraunces");
+  let body: ResolvedFont = owner.body
+    ? { font: owner.body, standIn: false, category: googleFont(owner.body)?.category ?? "sans-serif" }
+    : fileBody
+      ? { font: fileBody.family, standIn: false, category: fileBody.category ?? "sans-serif" }
+      : resolveFont(bodyText, "Inter");
   // A handwriting face is for a word or two, never for sentences people must read on a phone.
-  if (SCRIPT_FONTS.has(body.font)) {
+  if (body.category === "handwriting") {
     notes.push(`Body text: ${body.font} is a handwriting face, so posts set body text in Inter and keep ${body.font} for hand-written notes.`);
-    body = { font: "Inter", standIn: false };
+    body = { font: "Inter", standIn: false, category: "sans-serif" };
   }
-  const wordmark = curatedFont(lastItem(items, "type: wordmark")?.value, heading.font);
-  const handItem = items.find((i) => /script|hand|marker/i.test(`${i.label} ${i.value}`) && i.label.toLowerCase().startsWith("type"));
-  const hand = handItem ? curatedFont(handItem.value, "Caveat").font : body.font;
-  for (const [role, r, item] of [["Headings", heading, pair?.[1] ?? lastItem(items, "type: heading")?.value], ["Body text", body, pair?.[2] ?? lastItem(items, "type: body")?.value]] as const) {
-    if (r.standIn && item) notes.push(`${role}: "${item.slice(0, 60)}" isn't in the free font set, so posts use ${r.font} as a stand-in.`);
+  // The wordmark follows the headings unless the kit names a different face for it.
+  const wordmarkNamed = fontsNamedIn(lastItem(items, "type: wordmark")?.value ?? "")[0]?.family;
+  const wordmark = owner.heading || fileHeading ? heading.font : (wordmarkNamed ?? heading.font);
+  const handItem = items.find((i) => i.label.toLowerCase().startsWith("type") && /\b(script|handwritten|handwriting|hand-?lettered|marker|brush)\b/i.test(firstSentenceOf(i.value)));
+  const hand = heading.category === "handwriting" ? heading.font : handItem ? resolveFont(handItem.value, "Caveat").font : body.font;
+  for (const [role, r, item] of [["Headings", heading, headingText], ["Body text", body, bodyText]] as const) {
+    if (r.standIn && item) notes.push(`${role}: "${item.slice(0, 60)}" names no font, so posts use ${r.font}, the closest free match.`);
   }
-  return { heading: heading.font, body: body.font, wordmark: wordmark.font, hand };
+  for (const f of uploaded.filter((u) => !u.google && [heading.font, body.font].includes(u.family))) notes.push(`${f.family} is set from the font file you uploaded.`);
+  return { heading: heading.font, body: body.font, wordmark, hand };
 }
+
+const firstSentenceOf = (s: string) => s.split(/(?<=[.;])\s+/)[0] ?? s;
 
 // ---------- files ----------
-
-const DISPLAY_FONTS = new Set<string>(["Archivo Black", "DM Serif Display", "Playfair Display", "Instrument Serif", "Syne"]);
 
 /** The owner's logo size, as a share of the standard (1 = 3.2em tall), from a "Logo size: 130%…" answer. */
 export function logoScaleOf(items: IntakeItem[]): number {
@@ -151,7 +177,7 @@ export function logoScaleOf(items: IntakeItem[]): number {
 
 export function buildTokensCss(colors: SessionKit["colors"], fonts: SessionKit["fonts"], logoScale = 1): string {
   const font = (f: string) => `"${f}", system-ui, sans-serif`;
-  const headingWeight = DISPLAY_FONTS.has(fonts.heading) ? 400 : 700;
+  const headingWeight = headingWeightOf(fonts.heading);
   const lines = [
     `  --color-background: ${colors.background};`,
     `  --color-text: ${colors.text};`,
@@ -160,7 +186,7 @@ export function buildTokensCss(colors: SessionKit["colors"], fonts: SessionKit["
     `  --color-label: ${colors.label};`,
     ...(colors.accent2 ? [`  --color-accent-2: ${colors.accent2};`] : []),
     `  --font-wordmark: ${font(fonts.wordmark)};`,
-    `  --weight-wordmark: ${DISPLAY_FONTS.has(fonts.wordmark) || SCRIPT_FONTS.has(fonts.wordmark) ? 400 : 700};`,
+    `  --weight-wordmark: ${headingWeightOf(fonts.wordmark)};`,
     `  --tracking-wordmark: 0;`,
     `  --wordmark-line2-tracking: 0.3em;`,
     `  --wordmark-line2-scale: 0.45;`,
@@ -219,11 +245,11 @@ profiles:
 `;
 
 /** The kit a session's posts are made from, built from its drafted (and intake-answered) chunks. */
-export function kitFromChunks(chunks: IntakeChunks, business: { name: string }): SessionKit {
+export function kitFromChunks(chunks: IntakeChunks, business: { name: string; fonts?: UploadedFont[] }): SessionKit {
   const notes: string[] = [];
   const visual = chunks["visual-system"]?.draft.items ?? [];
   const colors = pickColors(visual, notes);
-  const fonts = pickFonts(visual, notes);
+  const fonts = pickFonts(visual, notes, business.fonts);
   const files: Record<string, string> = {};
   const ids: ExtractChunkId[] = [];
   for (const { id } of EXTRACT_CHUNKS) {
@@ -280,11 +306,7 @@ export function businessNameOf(chunks: IntakeChunks): string | null {
   return name ? name.slice(0, 60) : null;
 }
 
-const SINGLE_WEIGHT = new Set(["Archivo Black", "DM Serif Display", "Instrument Serif"]);
-
-/** The Google Fonts stylesheet for a kit's curated fonts, for rendering its posts in the browser. */
+/** The Google Fonts stylesheet for a kit's fonts, for rendering its posts in the browser. Any Google font loads by name. */
 export function googleFontsHref(fonts: string[]): string {
-  const families = [...new Set(fonts)].filter((f) => (CURATED_FONTS as readonly string[]).includes(f)).sort();
-  const spec = (f: string) => `family=${encodeURIComponent(f).replace(/%20/g, "+")}${SINGLE_WEIGHT.has(f) ? "" : ":wght@400;700"}`;
-  return `https://fonts.googleapis.com/css2?${families.map(spec).join("&")}&display=swap`;
+  return hrefFor(fonts);
 }
