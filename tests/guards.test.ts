@@ -256,6 +256,25 @@ test("upload caps: 1 PDF of up to 10 pages, 5 images, 1 URL per session", async 
   await expectRefusal(await up({ kind: "url", url: "https://halfacre.example/" }), 409, "upload_cap");
 });
 
+test("uploads: text files are read as text, font files keep their family and aren't read", async () => {
+  const { deps } = makeDeps();
+  const sid = await session(deps);
+  const up = (fields: Record<string, string | Blob>) => run(() => upload(formReq({ sessionId: sid, ...fields }), deps));
+  const doc = await up({ kind: "doc", file: new File(['{"colors": {"plum": "#361E39"}}'], "palette.json", { type: "application/json" }) });
+  assert.equal(doc.status, 201);
+  assert.equal(((await body(doc)) as { upload: { label: string } }).upload.label, "palette.json");
+  await expectRefusal(await up({ kind: "doc", file: new File([new Uint8Array([0xff, 0xfe, 0x00, 0x41])], "x.txt") }), 415, "doc_type");
+  await expectRefusal(await up({ kind: "doc", file: new File(["a".repeat(8001)], "long.txt") }), 413, "doc_too_long");
+  const ttf = new Uint8Array(64);
+  ttf.set([0, 1, 0, 0]);
+  const font = await up({ kind: "font", file: new File([ttf], "PlusJakartaSans-Regular.ttf") });
+  assert.equal(font.status, 201);
+  const rec = ((await body(font)) as { upload: { family: string; fontExt: string } }).upload;
+  assert.equal(rec.family, "Plus Jakarta Sans");
+  assert.equal(rec.fontExt, "ttf");
+  await expectRefusal(await up({ kind: "font", file: new File(["not a font"], "Fake.ttf") }), 415, "font_type");
+});
+
 test("spend: calls still running make the next one wait; only real spend closes the day", async () => {
   const { reserve, settle } = await import("../server/spend.ts");
   const { memoryKV } = await import("../server/store.ts");

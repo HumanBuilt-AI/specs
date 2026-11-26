@@ -26,6 +26,7 @@ export async function kitFiles(req: Request, deps: Deps) {
     tokensCss: kit.tokensCss,
     wordmarkLines: kit.wordmarkLines,
     fontsHref: kit.fontsHref,
+    fontFiles: kit.fontFiles ?? [],
     templates: CONTENT.templates,
     templatesManifest: CONTENT.templatesManifest,
     baseCss: CONTENT.baseCss,

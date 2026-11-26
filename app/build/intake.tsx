@@ -5,6 +5,7 @@
 // only the calls that change a post are asked, one at a time, each with one catalog component
 // and one sentence. Beside each call is the kit's first post, live: an answer changes it on the
 // spot. Typing is the fallback under each call, not the main way to answer.
+import { withFontFiles } from "../lib/fonts.ts";
 import { Working } from "../ui/working.tsx";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LIMITS, charCount } from "../../core/limits.ts";
@@ -24,7 +25,7 @@ type Turn = { id: string; about: string; say: string; call: Call | null; answer?
 type Settled = { gap: string; mode: "conflict" | "kept"; about: string; text: string; why: string };
 type View = { done: boolean; gapsLeft: number; callsLeft: number; turnsLeft: number; capped?: boolean; settled: Settled[]; turns: Turn[]; pending: string | null; changesLeft?: number; needLogo?: boolean };
 type Reply = { answer: unknown } | { text: string } | { skip: true };
-type KitFiles = { tokensCss: string; wordmarkLines: string[]; fontsHref: string; templates: Record<string, string>; baseCss: string; photos: { file: string; uploadId?: string }[]; logoUploadId: string | null };
+type KitFiles = { tokensCss: string; wordmarkLines: string[]; fontsHref: string; templates: Record<string, string>; baseCss: string; photos: { file: string; uploadId?: string }[]; logoUploadId: string | null; fontFiles?: { uploadId: string; family: string; ext: "ttf" | "otf" | "woff" | "woff2" }[] };
 
 const messageOf = (e: unknown) => (e as Error).message ?? "Something went wrong.";
 
@@ -80,8 +81,9 @@ function IntakeInner({ sessionId, chunks, onKitChanged }: { sessionId: string; c
   // The kit's tokens and photos for the live post. Fetched again after each answer, since a
   // palette or font answer changes the tokens.
   const loadKit = useCallback(async () => {
-    const k = await call<KitFiles>("/api/kit/files", { sessionId }).catch(() => null);
-    if (!k) return;
+    const raw = await call<KitFiles>("/api/kit/files", { sessionId }).catch(() => null);
+    if (!raw) return;
+    const k = await withFontFiles(sessionId, raw);
     setKit(k);
     for (const p of k.photos) {
       if (!p.uploadId || requested.current.has(p.uploadId)) continue;

@@ -8,6 +8,7 @@ import { startSession, upload, type Deps } from "../server/handlers.ts";
 import { readUpload, assemble, getKit } from "../server/extract.ts";
 import { intakeTurn } from "../server/intake.ts";
 import { todaysSpend } from "../server/spend.ts";
+import { kitFiles } from "../server/make.ts";
 import { ASSEMBLE_TARGETS, EXTRACT_CHUNKS } from "../core/extract.ts";
 import { applyAnswer, describeAnswer, findGaps, oneSentence, progress, REQUIRED, typedPalette, tidyPalettes, ownerHexes, logoSizeCall, type IntakeChunks } from "../core/intake.ts";
 import { sizePercent } from "../core/catalog.ts";
@@ -307,6 +308,41 @@ test("the owner can ask for a change any time: Specs brings the card, the answer
   const kit2 = await body(await run(() => getKit(jsonReq("/api/kit", { sessionId: sid }), deps)));
   const vs2 = (kit2.chunks as { target: string; draft?: { items: { label: string; value: string }[] } }[]).find((c) => c.target === "visual-system")!;
   assert.match(vs2.draft!.items.at(-1)!.value, /^Logo size: 1[23]\d% of the standard size$/);
+});
+
+test("fonts asked for in the chat reach the kit: named fonts lead the card, and a typed font is set as a font (Good Company, Nov 26)", async () => {
+  const change = (user: string) =>
+    /<visual_system>/.test(user)
+      ? /what fonts/i.test(user)
+        ? { say: "Headlines use Fraunces and body text uses Inter.", component: "none", props: "{}", chunk: "visual-system", about: "Which fonts" }
+        : {
+            say: "Plus Jakarta Sans isn't on our list, so here are close pairings.",
+            component: "FontPairCard",
+            props: JSON.stringify({ title: "Which body font", titleMuted: "pairs with Fraunces?", options: [{ id: "m", display: "Fraunces", body: "Manrope" }, { id: "i", display: "Fraunces", body: "Inter" }] }),
+            chunk: "visual-system",
+            about: "Use Fraunces and Plus Jakarta",
+          }
+      : intakeTurnFor(user);
+  const { deps, sent } = makeDeps({ intake: change });
+  const { sid } = await draftedSession(deps);
+  await view(await turn(deps, { sessionId: sid }));
+
+  // The chat sees what posts use now, by name.
+  await view(await turn(deps, { sessionId: sid, ask: "what fonts are being used" }));
+  assert.match(sent.at(-1)!.user, /<posts_use>[\s\S]*Headline font: [A-Z][\s\S]*Body font: [A-Z]/);
+
+  // The owner's own fonts are the card's first option, even when the model offered others.
+  const asked = await view(await turn(deps, { sessionId: sid, ask: "I specifically want to use Fraunces for headline and PlusJakartaSans for body both google fonts" }));
+  const req = asked.turns.at(-1)!;
+  const options = req.call.props.options as { id: string; display: string; body: string }[];
+  assert.deepEqual([options[0]!.display, options[0]!.body], ["Fraunces", "Plus Jakarta Sans"]);
+
+  // Typing a font under "Something else" sets it, keeping the headline font asked for in the chat.
+  await view(await turn(deps, { sessionId: sid, reply: { turnId: req.id, text: "PlusJakartaSans" } }));
+  const files = (await body(await run(() => kitFiles(jsonReq("/api/kit/files", { sessionId: sid }), deps)))) as { tokensCss: string; fontsHref: string };
+  assert.match(files.tokensCss, /--font-heading: "Fraunces"/);
+  assert.match(files.tokensCss, /--font-body: "Plus Jakarta Sans"/);
+  assert.match(files.fontsHref, /Plus\+Jakarta\+Sans/);
 });
 
 test("a hex typed on a palette card replaces the nearest color, keeping role order", () => {

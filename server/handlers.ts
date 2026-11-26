@@ -19,7 +19,7 @@ import type { CallStep } from "./claude.ts";
 import { createSession, loadSession, updateSession, claimIpSlot, type PostRecord, type UploadRecord } from "./sessions.ts";
 import { planPrompt, resolvePlan, writePrompt, cleanWritten, estimateInputTokens } from "./pipeline.ts";
 import { kitFor } from "./kit-source.ts";
-import { checkImage, checkPdf, checkUrl } from "./uploads.ts";
+import { checkDoc, checkFont, checkImage, checkPdf, checkUrl } from "./uploads.ts";
 import { uploadLabel, type UploadKind } from "../core/extract.ts";
 import { isHex } from "../core/colors.ts";
 
@@ -152,6 +152,8 @@ const UPLOAD_CAPS: Record<UploadRecord["kind"], number> = {
   url: LIMITS.urlCount,
   pasted: LIMITS.pastedCount,
   note: LIMITS.noteCount,
+  doc: LIMITS.docCount,
+  font: LIMITS.fontCount,
 };
 const UPLOAD_NAMES: Record<UploadRecord["kind"], string> = {
   image: "photos",
@@ -160,8 +162,10 @@ const UPLOAD_NAMES: Record<UploadRecord["kind"], string> = {
   url: "website address",
   pasted: "block of pasted website text",
   note: "note",
+  doc: "text files",
+  font: "font files",
 };
-const LABEL_KIND: Record<UploadRecord["kind"], UploadKind> = { image: "photo", logo: "logo", pdf: "pdf", url: "url", pasted: "pasted", note: "note" };
+const LABEL_KIND: Record<UploadRecord["kind"], UploadKind> = { image: "photo", logo: "logo", pdf: "pdf", url: "url", pasted: "pasted", note: "note", doc: "doc", font: "font" };
 
 /** Colors sampled in the browser: a short JSON list of hex values and shares, nothing else. */
 function parseColors(raw: FormDataEntryValue | null): { hex: string; share: number }[] | undefined {
@@ -216,6 +220,17 @@ export async function upload(req: Request, deps: Deps) {
     if (kind === "pdf") record = { id: uploadId, kind, label, ...(await checkPdf(file)) };
     else record = { id: uploadId, kind, label, ...(await checkImage(file)), colors: parseColors(form.get("colors")) };
     stored = await file.arrayBuffer();
+  } else if (kind === "doc" || kind === "font") {
+    if (!(file instanceof File)) throw new Refusal(400, "bad_fields", `"file" is required for kind "${kind}".`);
+    const label = uploadLabel(LABEL_KIND[kind], file.name);
+    if (kind === "font") {
+      record = { id: uploadId, kind, label, ...(await checkFont(file)) };
+      stored = await file.arrayBuffer();
+    } else {
+      const { text: docText, ...rest } = await checkDoc(file);
+      record = { id: uploadId, kind, label, ...rest };
+      stored = new TextEncoder().encode(docText).buffer as ArrayBuffer;
+    }
   } else if (kind === "url") {
     if (typeof rawUrl !== "string") throw new Refusal(400, "bad_fields", `"url" is required for kind "url".`);
     const url = checkUrl(rawUrl);
@@ -227,7 +242,7 @@ export async function upload(req: Request, deps: Deps) {
     record = { id: uploadId, kind, label: uploadLabel(kind, null), chars: charCount(text) };
     stored = new TextEncoder().encode(text).buffer as ArrayBuffer;
   } else {
-    throw new Refusal(400, "bad_fields", `"kind" must be "image", "logo", "pdf", "url", "pasted" or "note".`);
+    throw new Refusal(400, "bad_fields", `"kind" must be "image", "logo", "pdf", "doc", "font", "url", "pasted" or "note".`);
   }
   if (kind !== "image" && kind !== "logo" && form.has("colors")) throw new Refusal(400, "unexpected_fields", `"colors" only goes with a photo or logo.`);
 
@@ -236,7 +251,7 @@ export async function upload(req: Request, deps: Deps) {
   await loadSession(deps.kv, sessionId, now);
   const session = await updateSession(deps.kv, sessionId, (s) => {
     // A logo can still be added after drafting: nothing reads it, it just signs the posts.
-    if (s.extraction?.locked && record.kind !== "logo") throw new Refusal(409, "extraction_started", "The kit is already being built from these uploads. Start a new session to add more.");
+    if (s.extraction?.locked && record.kind !== "logo" && record.kind !== "font") throw new Refusal(409, "extraction_started", "The kit is already being built from these uploads. Start a new session to add more.");
     const have = s.uploads.filter((u) => u.kind === record.kind).length;
     const cap = UPLOAD_CAPS[record.kind];
     if (have >= cap) {

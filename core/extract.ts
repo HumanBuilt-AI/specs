@@ -12,7 +12,7 @@ import { fillPrompt, asData } from "./prompts.ts";
 
 // ---------- what gets extracted ----------
 
-export const UPLOAD_KINDS = ["photo", "logo", "pdf", "url", "pasted", "note"] as const;
+export const UPLOAD_KINDS = ["photo", "logo", "pdf", "url", "pasted", "note", "doc", "font"] as const;
 export type UploadKind = (typeof UPLOAD_KINDS)[number];
 
 /** The kit chunks extraction drafts, in reveal order. readme, tokens.css and _retrieval-rules are built in code later. */
@@ -170,7 +170,7 @@ export function uploadLabel(kind: UploadKind, name: string | null, url?: string)
     }
   }
   const clean = (name ?? "").replace(/[^\w.\- ]+/g, "").trim().slice(0, 80);
-  return clean || (kind === "pdf" ? "document.pdf" : kind === "logo" ? "logo" : "photo");
+  return clean || (kind === "pdf" ? "document.pdf" : kind === "logo" ? "logo" : kind === "doc" ? "notes.txt" : kind === "font" ? "font" : "photo");
 }
 
 export type SampledColors = { upload: string; colors: { hex: string; share: number }[] };

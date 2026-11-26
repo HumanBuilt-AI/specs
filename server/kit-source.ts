@@ -4,6 +4,7 @@
 import "server-only";
 import { CONTENT, DEMO_BRAND_IDS, type DemoBrandId } from "./generated/content.ts";
 import { kitFromChunks, businessNameOf, googleFontsHref } from "../core/session-kit.ts";
+import { googleFont } from "../core/fonts.ts";
 import type { Image } from "../core/claude.ts";
 import { Refusal } from "./http.ts";
 import type { Session } from "./sessions.ts";
@@ -22,6 +23,8 @@ export type KitSource = {
   wordmarkLines: string[];
   /** The stylesheet that loads the kit's fonts in the browser. */
   fontsHref: string;
+  /** Uploaded font files the posts use (fonts Google doesn't serve). The browser fetches each and adds its @font-face. */
+  fontFiles?: { uploadId: string; family: string; ext: "ttf" | "otf" | "woff" | "woff2" }[];
 };
 
 export const isDemoBrand = (b: string): b is DemoBrandId => (DEMO_BRAND_IDS as readonly string[]).includes(b);
@@ -50,21 +53,24 @@ export async function sessionKit(deps: { kv: KV }, session: Session): Promise<Ki
   }
   const chunks = await loadChunks(deps, session);
   const name = businessNameOf(chunks) ?? "Your business";
-  const kit = kitFromChunks(chunks, { name });
+  const uploadedFonts = session.uploads.filter((u) => u.kind === "font" && u.family);
+  const kit = kitFromChunks(chunks, { name, fonts: uploadedFonts.map((u) => ({ family: u.family!, google: !!googleFont(u.family!) })) });
+  const used = new Set(Object.values(kit.fonts));
+  const fontFiles = uploadedFonts.filter((u) => used.has(u.family!) && !googleFont(u.family!)).map((u) => ({ uploadId: u.id, family: u.family!, ext: u.fontExt ?? "ttf" }));
   const line = chunks["positioning-core"]?.draft.items.find((i) => i.label.toLowerCase().startsWith("what_it_is"))?.value ?? chunks["brand-about"]?.draft.summary ?? "";
   const photos: KitPhoto[] = [];
-  const used = new Set<string>();
+  const taken = new Set<string>();
   for (const up of session.uploads.filter((u) => u.kind === "image")) {
     const bytes = await deps.kv.getBytes(`upload/${session.id}/${up.id}`);
     const mediaType = up.mediaType ?? "image/jpeg";
     if (!bytes || !MEDIA.has(mediaType)) continue;
     // Plans name photos by file, so keep names unique within the session.
     let file = up.label ?? "photo";
-    for (let n = 2; used.has(file); n++) file = `${up.label ?? "photo"} (${n})`;
-    used.add(file);
+    for (let n = 2; taken.has(file); n++) file = `${up.label ?? "photo"} (${n})`;
+    taken.add(file);
     photos.push({ file, alt: `Uploaded photo: ${up.label ?? "photo"}`, mediaType: mediaType as Image["mediaType"], base64: Buffer.from(bytes).toString("base64"), uploadId: up.id });
   }
-  return { id: "session", files: kit.files, businessName: name, businessLine: line.slice(0, 300), photos, tokensCss: kit.tokensCss, wordmarkLines: kit.wordmarkLines, fontsHref: googleFontsHref(Object.values(kit.fonts)) };
+  return { id: "session", files: kit.files, businessName: name, businessLine: line.slice(0, 300), photos, tokensCss: kit.tokensCss, wordmarkLines: kit.wordmarkLines, fontsHref: googleFontsHref(Object.values(kit.fonts)), fontFiles };
 }
 
 export async function kitFor(deps: { kv: KV }, session: Session, brand: DemoBrandId | "session"): Promise<KitSource> {

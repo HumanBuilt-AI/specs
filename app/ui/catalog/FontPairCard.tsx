@@ -1,23 +1,20 @@
 "use client";
 
-// One to three font pairings, each shown as a big "Aa" in the display face with the body face under it.
-// Fonts load from Google Fonts only when they are in the curated list.
+// One to three font pairings, each shown as a big "Aa" in the display face with a line of body text
+// in the body face under it, so two pairs that share a headline font still look different.
+// Any Google font loads by name; other names fall back to a system face.
 import { useEffect, useState } from "react";
-import { CURATED_FONTS, WRITES_TO, type AnswerOf, type PropsOf } from "../../../core/catalog.ts";
+import { WRITES_TO, type AnswerOf, type PropsOf } from "../../../core/catalog.ts";
+import { googleFont, googleFontsHref } from "../../../core/fonts.ts";
 import { Question, Shell, Skeleton, type CommonProps } from "../primitives.tsx";
 
 type Props = PropsOf<"FontPairCard"> & CommonProps<AnswerOf<"FontPairCard">> & { value?: string };
 
-const curated = new Set<string>(CURATED_FONTS);
-
 function useGoogleFonts(families: string[]) {
-  const key = families.filter((f) => curated.has(f)).sort().join("|");
+  const key = [...new Set(families.filter((f) => googleFont(f)))].sort().join("|");
   useEffect(() => {
     if (!key) return;
-    const href = `https://fonts.googleapis.com/css2?${key
-      .split("|")
-      .map((f) => `family=${encodeURIComponent(f).replace(/%20/g, "+")}`)
-      .join("&")}&display=swap`;
+    const href = googleFontsHref(key.split("|"));
     if (document.querySelector(`link[href="${href}"]`)) return;
     const link = document.createElement("link");
     link.rel = "stylesheet";
@@ -49,12 +46,13 @@ export function FontPairCard({ title, titleMuted, options, value, status, errorT
             <span className="c-font-aa" style={{ fontFamily: `"${o.display}", Georgia, serif` }}>
               Aa
             </span>
-            {o.sample && (
-              <span className="c-font-sample" style={{ fontFamily: `"${o.display}", Georgia, serif` }}>
-                {o.sample}
-              </span>
-            )}
-            <span style={{ fontFamily: `"${o.body}", system-ui, sans-serif`, fontSize: 13 }}>
+            <span className="c-font-sample" style={{ fontFamily: `"${o.display}", Georgia, serif` }}>
+              {o.sample ?? "Headline"}
+            </span>
+            <span className="c-font-body" style={{ fontFamily: `"${o.body}", system-ui, sans-serif` }}>
+              Body text reads like this in {o.body}.
+            </span>
+            <span className="c-mono-dim">
               {o.display} + {o.body}
             </span>
             {o.note && <span className="c-mono-dim">{o.note}</span>}

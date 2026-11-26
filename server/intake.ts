@@ -27,13 +27,16 @@ import {
   progress,
   rawCall,
   targetChunk,
+  postsUseText,
+  withOwnerFonts,
   type Gap,
   type IntakeChunks,
   type Resolution,
   type Resolutions,
   type Transcript,
 } from "../core/intake.ts";
-import { logoScaleOf } from "../core/session-kit.ts";
+import { businessNameOf, kitFromChunks, logoScaleOf, ownerFonts } from "../core/session-kit.ts";
+import { googleFont } from "../core/fonts.ts";
 import { keepItem, pullOf, triage, undoRestore, writeConflict, type Plan, type Restore, type Settlement } from "../core/triage.ts";
 import { CONTENT } from "./generated/content.ts";
 import { Refusal, json, readJson } from "./http.ts";
@@ -185,6 +188,24 @@ export async function intakeTurn(req: Request, deps: Deps) {
 
 // ---------- the owner's reply ----------
 
+/** A kit built from the chunks as posts would use it now, with the session's uploaded fonts. */
+function kitNow(chunks: Awaited<ReturnType<typeof loadChunks>>, session: Session) {
+  const fonts = session.uploads.filter((u) => u.kind === "font" && u.family).map((u) => ({ family: u.family!, google: !!googleFont(u.family!) }));
+  return kitFromChunks(chunks, { name: businessNameOf(chunks) ?? "Your business", fonts });
+}
+
+/** "Fonts: X for headings, Y for body text" from typed words on a font card, or null if they name no Google font. */
+export function typedFonts(typed: string, asked: string | undefined, call: ParsedCall): string | null {
+  const now = ownerFonts(typed);
+  if (!now.heading && !now.body) return null;
+  const before = asked ? ownerFonts(asked) : {};
+  const options = call.component === "FontPairCard" ? call.props.options : [];
+  const heading = now.heading ?? before.heading ?? options[0]?.display;
+  const body = now.body ?? before.body ?? options[0]?.body;
+  if (!heading || !body) return null;
+  return `Fonts: ${heading} for headings, ${body} for body text`;
+}
+
 async function applyReply(deps: Deps, session: Session, reply: NonNullable<z.infer<typeof Body>["reply"]>) {
   const st = (await deps.kv.get<IntakeState>(intakeKey(session.id)))?.value ?? empty();
   const turn = pendingOf(st);
@@ -218,7 +239,10 @@ async function applyReply(deps: Deps, session: Session, reply: NonNullable<z.inf
     // Typed answers are stored as the owner's words. They reach a prompt later only through asData.
     // A typed hex on a palette card becomes a palette, so the posts can use it.
     const palette = typedPalette(call, reply.text);
-    text = palette ? `Palette: ${palette}` : `Owner wrote: ${reply.text.trim()}`;
+    // Fonts typed on a font card ("PlusJakartaSans") are set as fonts; a role they don't name keeps
+    // what the owner asked for in the chat, then what the card offered.
+    const fonts = call.component === "FontPairCard" ? typedFonts(reply.text, turn.asked, call) : null;
+    text = palette ? `Palette: ${palette}` : fonts ? fonts : `Owner wrote: ${reply.text.trim()}`;
   }
 
   // Write the answer into the kit (skips and already-closed gaps change nothing).
@@ -365,6 +389,7 @@ async function changeTurn(deps: Deps, session: Session, message: string) {
   try {
     const chunks = await loadChunks(deps, session);
     const photos = session.uploads.filter((u) => u.kind === "image" && u.label);
+    const now = kitNow(chunks, session);
     const transcript: Transcript = claimed.turns
       .filter((t) => t.answer || t.skipped)
       .map((t) => ({ gap: t.gap, say: t.say, component: t.call?.component ?? "none", answer: t.answer ?? "skipped" }));
@@ -375,6 +400,7 @@ async function changeTurn(deps: Deps, session: Session, message: string) {
       sampled: session.uploads.filter((u) => u.colors?.length).map((u) => ({ upload: u.label ?? "photo", colors: u.colors!.slice(0, 5).map((c) => c.hex) })),
       fonts: CURATED_FONTS,
       message,
+      postsUse: postsUseText(now),
     });
     const { data } = await guardedCall(deps, "intake", prompt, ChangeTurnSchema, approxTokens(prompt.system + prompt.user));
 
@@ -395,6 +421,11 @@ async function changeTurn(deps: Deps, session: Session, message: string) {
       const swatchProps = out.call.props as { options?: unknown };
       if (out.call.component === "SwatchPicker" && Array.isArray(swatchProps.options)) {
         raw = { ...out.call, props: { ...swatchProps, options: tidyPalettes(swatchProps.options as Parameters<typeof tidyPalettes>[0], ownerHexes(message)) } };
+      }
+      // Fonts the owner named are always the first option, exactly as named.
+      const fontProps = out.call.props as { options?: unknown };
+      if (out.call.component === "FontPairCard" && Array.isArray(fontProps.options)) {
+        raw = { ...out.call, props: { ...fontProps, options: withOwnerFonts(fontProps.options as Parameters<typeof withOwnerFonts>[0], message, now.fonts) } };
       }
       const parsed = parseCall(raw);
       if (!parsed.ok) throw new Refusal(502, "model_output", "That answer came back malformed. Try again.");
@@ -461,9 +492,11 @@ const ImageBody = z.strictObject({ sessionId: id, uploadId: id });
 export async function uploadImage(req: Request, deps: Deps) {
   const body = parseBody(ImageBody, await readJson(req, LIMITS.jsonBodyBytes));
   const session = await loadSession(deps.kv, body.sessionId, deps.now());
-  const up = session.uploads.find((u) => u.id === body.uploadId && (u.kind === "image" || u.kind === "logo"));
+  const up = session.uploads.find((u) => u.id === body.uploadId && (u.kind === "image" || u.kind === "logo" || u.kind === "font"));
   if (!up) throw new Refusal(404, "no_upload", "There's no such photo in this session.");
   const bytes = await deps.kv.getBytes(`upload/${session.id}/${up.id}`);
   if (!bytes) throw new Refusal(404, "no_upload", "That photo's file is missing.");
-  return new Response(bytes, { headers: { "content-type": up.mediaType ?? "image/jpeg", "cache-control": "private, max-age=3600" } });
+  // A font file goes back as an opaque download; the browser turns it into a data URL for the post.
+  const type = up.kind === "font" ? `font/${up.fontExt ?? "ttf"}` : (up.mediaType ?? "image/jpeg");
+  return new Response(bytes, { headers: { "content-type": type, "cache-control": "private, max-age=3600" } });
 }

@@ -19,7 +19,7 @@ import { businessNameOf } from "../../core/session-kit.ts";
 import MakePosts from "./make-posts.tsx";
 import { ReadingFinds } from "./reading-finds.tsx";
 
-type UploadKindApi = "image" | "logo" | "pdf" | "url" | "pasted" | "note";
+type UploadKindApi = "image" | "logo" | "pdf" | "url" | "pasted" | "note" | "doc" | "font";
 type Upload = { id: string; kind: UploadKindApi; label: string; colors?: Swatch[]; pages?: number };
 type CallState = { status: "running" | "done" | "failed"; attempts: number };
 type Item = ChunkDraft["items"][number] & { edited?: boolean };
@@ -35,7 +35,9 @@ type Kit = {
 
 const SESSION_KEY = "specs.sessionId";
 const HEX = /#[0-9a-f]{6}\b/gi;
-const KIND_NAME: Record<UploadKindApi, string> = { image: "Photo", logo: "Logo", pdf: "PDF", url: "Website", pasted: "Website text", note: "Note" };
+const KIND_NAME: Record<UploadKindApi, string> = { image: "Photo", logo: "Logo", pdf: "PDF", url: "Website", pasted: "Website text", note: "Note", doc: "Text file", font: "Font" };
+const FONT_FILE = /\.(ttf|otf|woff2?)$/i;
+const DOC_FILE = /\.(txt|md|markdown|json|css|csv)$/i;
 
 const STATE_TEXT: Record<string, string> = {
   open: "Open",
@@ -60,6 +62,8 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
   const [photos, setPhotos] = useState<File[]>([]);
   const [logo, setLogo] = useState<File | null>(null);
   const [pdf, setPdf] = useState<File | null>(null);
+  const [docs, setDocs] = useState<File[]>([]);
+  const [fontFiles, setFontFiles] = useState<File[]>([]);
   const [url, setUrl] = useState("");
   const [pasted, setPasted] = useState("");
   const [note, setNote] = useState("");
@@ -209,7 +213,8 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
       added.push(d.upload);
       if (thumb) setThumbs((t) => ({ ...t, [d.upload.id]: URL.createObjectURL(thumb) }));
       setUploads((u) => [...u, d.upload]);
-      readSoon(d.upload);
+      // Font files aren't read; posts use them as they are.
+      if (d.upload.kind !== "font") readSoon(d.upload);
     };
     // One file that won't go up (an odd format, a refused size) never stops the rest.
     const attempt = async (step: () => Promise<void>) => {
@@ -224,6 +229,8 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
       if (note.trim()) await attempt(() => send({ kind: "note", text: note }));
       if (pasted.trim()) await attempt(() => send({ kind: "pasted", text: pasted }));
       if (url.trim()) await attempt(() => send({ kind: "url", url: url.trim() }));
+      for (const f of docs) await attempt(() => send({ kind: "doc", file: f }));
+      for (const f of fontFiles) await attempt(() => send({ kind: "font", file: f }));
       if (pdf) await attempt(() => send({ kind: "pdf", file: pdf }));
       // A logo dropped in with the photos ("tss-logo.png") is still the logo, when the logo slot is empty.
       const logoFile = logo ?? photos.find((p) => /logo/i.test(p.name)) ?? null;
@@ -261,7 +268,7 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
   }
 
   async function readAndDraftSteps(sid: string, list: Upload[], tried: Set<string>) {
-    const unread = list.filter((u) => !tried.has(u.id) && reads[u.id]?.status !== "done");
+    const unread = list.filter((u) => u.kind !== "font" && !tried.has(u.id) && reads[u.id]?.status !== "done");
     await pool(unread, READ_AT_ONCE, (u) => readOne(sid, u));
     // One more try for any read that failed (a slow page, a timeout), then draft from what was read.
     let kit = await call<Kit>("/api/kit", { sessionId: sid }).catch(() => null);
@@ -293,7 +300,7 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
   // ---------- view ----------
 
   const started = uploads.length > 0;
-  const nothingChosen = !photos.length && !logo && !pdf && !url.trim() && !pasted.trim() && !note.trim();
+  const nothingChosen = !photos.length && !logo && !pdf && !docs.length && !url.trim() && !pasted.trim() && !note.trim();
   const tooLong = charCount(note) > LIMITS.messageChars || charCount(pasted) > LIMITS.pastedChars;
   // The gaps step starts once every chunk has finished drafting (or used up its tries).
   const targetIds = [...EXTRACT_CHUNKS.map((c) => c.id as string), "conflicts"];
@@ -302,7 +309,7 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
     targetIds.every((t) => targets[t]?.status === "done" || (targets[t]?.status === "failed" && targets[t]!.attempts >= LIMITS.extractAttempts));
   // Uploads that were never read, or drafting that stopped (a reload, a closed tab): offer to carry on.
   const anyRunning = Object.values(reads).some((r) => r?.status === "running") || Object.values(targets).some((t) => t?.status === "running");
-  const stalled = started && !busy && !working && !anyRunning && !draftingDone && (uploads.some((u) => !reads[u.id]) || Object.values(reads).some((r) => r?.status === "done"));
+  const stalled = started && !busy && !working && !anyRunning && !draftingDone && (uploads.some((u) => u.kind !== "font" && !reads[u.id]) || Object.values(reads).some((r) => r?.status === "done"));
   const labelOf = useMemo(() => Object.fromEntries(uploads.map((u) => [u.id, u.label])), [uploads]);
   const intakeChunks = useMemo<IntakeChunks>(() => {
     const out: IntakeChunks = {};
@@ -320,13 +327,17 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
     const logoLike = files.find((f) => isSvg(f) || (/^image\//.test(f.type) && /logo|wordmark|lockup/i.test(f.name)));
     const images = files.filter((f) => f !== logoLike && /^image\/(jpeg|png|webp|gif|avif|heic|heif)$/.test(f.type));
     const pdfs = files.filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+    const fontsIn = files.filter((f) => FONT_FILE.test(f.name));
+    const docsIn = files.filter((f) => DOC_FILE.test(f.name));
+    if (fontsIn.length) setFontFiles((p) => [...p, ...fontsIn].slice(0, LIMITS.fontCount));
+    if (docsIn.length) setDocs((p) => [...p, ...docsIn].slice(0, LIMITS.docCount));
     const design = files.map(logoProblem).find((p) => p && !/\.pdf/i.test(p));
     if (logoLike) setLogo(logoLike);
     if (images.length) setPhotos((p) => [...p, ...images].slice(0, LIMITS.imageCount));
     if (pdfs[0]) setPdf(pdfs[0]);
-    const left = files.length - (logoLike ? 1 : 0) - images.length - Math.min(1, pdfs.length);
+    const left = files.length - (logoLike ? 1 : 0) - images.length - Math.min(1, pdfs.length) - fontsIn.length - docsIn.length;
     if (design) setError(design);
-    else if (left > 0) setError(`Specs takes photos, one logo (SVG, PNG, JPEG or WebP) and one PDF. ${left} ${left === 1 ? "file was" : "files were"} left out.`);
+    else if (left > 0) setError(`Specs takes photos, one logo (SVG, PNG, JPEG or WebP), one PDF, text files (.txt, .md, .json, .css) and font files (.ttf, .otf, .woff, .woff2). ${left} ${left === 1 ? "file was" : "files were"} left out.`);
     else setError(null);
   }
 
@@ -380,9 +391,9 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
               onDrop([...e.dataTransfer.files]);
             }}
           >
-            <p className="dropzone-title">Drop photos, a logo and a PDF here</p>
+            <p className="dropzone-title">Drop photos, a logo, a PDF, text files and fonts here</p>
             <p className="muted small">
-              Up to {LIMITS.imageCount} photos, one logo (SVG or PNG is best) and one PDF of up to {LIMITS.pdfPages} pages. Images are shrunk in your browser before upload.
+              Up to {LIMITS.imageCount} photos, one logo (SVG or PNG is best), one PDF of up to {LIMITS.pdfPages} pages, {LIMITS.docCount} text files (notes, a brand file) and {LIMITS.fontCount} font files. Images are shrunk in your browser before upload.
             </p>
             <div className="dropzone-pick">
               <label htmlFor="photos" className="c-btn ghost">
@@ -397,8 +408,16 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
                 Choose a PDF
               </label>
               <input id="pdf" className="visually-hidden" type="file" accept="application/pdf" onChange={(e) => setPdf(e.target.files?.[0] ?? null)} />
+              <label htmlFor="docs" className="c-btn ghost">
+                Text files
+              </label>
+              <input id="docs" className="visually-hidden" type="file" accept=".txt,.md,.markdown,.json,.css,.csv,text/plain,text/markdown,application/json,text/css" multiple onChange={(e) => setDocs((p) => [...p, ...(e.target.files ?? [])].slice(0, LIMITS.docCount))} />
+              <label htmlFor="fonts" className="c-btn ghost">
+                Fonts
+              </label>
+              <input id="fonts" className="visually-hidden" type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" multiple onChange={(e) => setFontFiles((p) => [...p, ...(e.target.files ?? [])].slice(0, LIMITS.fontCount))} />
             </div>
-            {(photos.length > 0 || pdf || logo) && (
+            {(photos.length > 0 || pdf || logo || docs.length > 0 || fontFiles.length > 0) && (
               <ul className="dropped">
                 {logo && (
                   <li>
@@ -414,6 +433,26 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
                   <li key={`${p.name}-${i}`}>
                     <span>{p.name}</span>
                     <button type="button" className="quiet" aria-label={`Remove ${p.name}`} onClick={() => setPhotos((ps) => ps.filter((_, j) => j !== i))}>
+                      Remove
+                    </button>
+                  </li>
+                ))}
+                {docs.map((f, i) => (
+                  <li key={`doc-${f.name}-${i}`}>
+                    <span>
+                      {f.name} <span className="muted small">text</span>
+                    </span>
+                    <button type="button" className="quiet" aria-label={`Remove ${f.name}`} onClick={() => setDocs((ds) => ds.filter((_, j) => j !== i))}>
+                      Remove
+                    </button>
+                  </li>
+                ))}
+                {fontFiles.map((f, i) => (
+                  <li key={`font-${f.name}-${i}`}>
+                    <span>
+                      {f.name} <span className="muted small">font</span>
+                    </span>
+                    <button type="button" className="quiet" aria-label={`Remove ${f.name}`} onClick={() => setFontFiles((fs) => fs.filter((_, j) => j !== i))}>
                       Remove
                     </button>
                   </li>
@@ -501,7 +540,7 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
                   {evidence[u.id] && <p className="muted small">{evidence[u.id]!.summary}</p>}
                   {failures[u.id] && <p className="error small">{failures[u.id]}</p>}
                 </div>
-                <span className={`status ${reads[u.id]?.status ?? "waiting"}`}>{statusText(reads[u.id])}</span>
+                {u.kind === "font" ? <span className="status done">Used in posts</span> : <span className={`status ${reads[u.id]?.status ?? "waiting"}`}>{statusText(reads[u.id])}</span>}
               </div>
             ))}
           </div>

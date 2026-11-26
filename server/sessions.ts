@@ -27,7 +27,10 @@ export type PostRecord = {
 
 export type UploadRecord = {
   id: string;
-  kind: "pdf" | "image" | "logo" | "url" | "pasted" | "note";
+  kind: "pdf" | "image" | "logo" | "url" | "pasted" | "note" | "doc" | "font";
+  /** A font file's family ("Plus Jakarta Sans") and format. */
+  family?: string;
+  fontExt?: "ttf" | "otf" | "woff" | "woff2";
   /** Display name, also how extraction cites it: the cleaned file name, the site, or "note". */
   label?: string;
   bytes?: number;

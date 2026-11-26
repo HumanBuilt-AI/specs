@@ -30,10 +30,10 @@ The MVP turns a small business's messy brand materials into a structured, agent-
 The MVP has five screens, and a visitor can reach finished posts in under five minutes using a demo brand.
 
 1. **Start.** Pick a preloaded demo brand (instant, no API cost) or start a live session by uploading materials.
-2. **Upload.** Logo, website URL, up to one 10-page PDF and five photos. A short note field covers anything else ("we're a family bakery, 30 years in Calumet").
+2. **Upload.** Logo, website URL, up to one 10-page PDF, five photos, four text files (.txt, .md, .json or .css, read like pasted text) and three font files (.ttf, .otf, .woff or .woff2, used in posts as uploaded; Scott, Nov 26). A short note field covers anything else ("we're a family bakery, 30 years in Calumet").
 3. **Brand DNA reveal.** The kit assembles on screen as extraction streams: colors pulled from photos, fonts identified, voice traits and positioning lines appearing, each tagged with the upload it came from. The user can edit or delete any item.
 4. **Fill the gaps.** A generative conversation where the agent renders A2UI components to resolve what is missing or conflicting: two candidate palettes, an unclear audience, an ambiguous tone. The user can also type freely. The step ends when the kit passes a completeness check.
-5. **Make posts.** Choose a post intent (promo, announcement, event, testimonial, tip), fill a short brief the agent renders for that intent, and get up to four posts. Each post has the "why this works" overlay, a with-kit / without-kit toggle, and PNG download. The brand kit export lives here too. A "Change the look" control lets the user swap the font pairing (from a curated set of free fonts, via `FontPairCard`) or replace the logo at any point; posts re-render from the updated tokens without new API calls or rewritten copy, and the change is written back to `visual-system`.
+5. **Make posts.** Choose a post intent (promo, announcement, event, testimonial, tip), fill a short brief the agent renders for that intent, and get up to four posts. Each post has the "why this works" overlay, a with-kit / without-kit toggle, and PNG download. The brand kit export lives here too. A "Change the look" control lets the user swap the font pairing (any Google Fonts family by name, with a curated set of free fonts as suggestions, or a font file the owner uploaded; via `FontPairCard`; Scott, Nov 26) or replace the logo at any point; posts re-render from the updated tokens without new API calls or rewritten copy, and the change is written back to `visual-system`.
 
 ## Brand kit format
 
@@ -190,7 +190,7 @@ The browser never holds the API key or writes a prompt; the function owns both, 
 | Key handling | Server-side only, in Netlify environment variables; `.env` in `.gitignore` before the first commit |
 | Prompt ownership | Client sends session ID, structured fields and capped free text; server builds every prompt |
 | Model and length | Pinned per step on the server; `max_tokens` set on every call |
-| Upload caps | 1 PDF up to 10 pages, 5 images up to 5 MB each, 1 URL |
+| Upload caps | 1 PDF up to 10 pages, 5 images up to 5 MB each, 1 URL, 4 text files up to 8,000 characters each, 3 font files up to 2 MB each |
 | Message cap | 500 characters per free-typed message |
 | Session cap | 4 posts and 1 regeneration per session; the bold pass runs on 1 of them (demo brands get theirs precomputed) |
 | Image model | Its own key (`GEMINI_API_KEY`) in Netlify; one rough per bold pass; its cost counts toward the daily tripwire |

@@ -1,7 +1,8 @@
 // A visitor's kit: drafted chunks become the files the post pipeline reads, with tokens built in code.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { kitFromChunks, curatedFont, contrast, businessNameOf } from "../core/session-kit.ts";
+import { kitFromChunks, contrast, businessNameOf, ownerFonts, googleFontsHref } from "../core/session-kit.ts";
+import { resolveFont, fontsNamedIn, fontFamilyFromFile, sniffFont, headingWeightOf } from "../core/fonts.ts";
 import { selectChunks, parseChunks } from "../core/kit.ts";
 import type { IntakeChunks } from "../core/intake.ts";
 
@@ -46,13 +47,75 @@ test("a second strong brand color the roles left out is kept as accent 2", () =>
   assert.equal(kitFromChunks(chunks, { name: "Night Slice" }).colors.accent2, null);
 });
 
-test("fonts: curated names pass through, others get a stand-in by style", () => {
-  assert.deepEqual(curatedFont("Inter, 400", "Lora"), { font: "Inter", standIn: false });
-  assert.equal(curatedFont("Tall condensed poster capitals", "Inter").font, "Archivo Black");
-  assert.equal(curatedFont("a classic garamond", "Inter").font, "Lora");
+test("fonts: any named Google font passes through, a description gets a stand-in by style", () => {
+  assert.deepEqual(resolveFont("Inter, 400", "Lora"), { font: "Inter", standIn: false, category: "sans-serif" });
+  assert.equal(resolveFont("Plus Jakarta Sans, light", "Inter").font, "Plus Jakarta Sans");
+  assert.equal(resolveFont("Tall condensed poster capitals", "Inter").font, "Archivo Black");
+  assert.equal(resolveFont("a classic garamond", "Inter").font, "Lora");
   const kit = kitFromChunks(chunks, { name: "Night Slice" });
-  assert.equal(kit.fonts.heading, "Archivo Black");
+  assert.equal(kit.fonts.heading, "Anton");
   assert.equal(kit.fonts.body, "Inter");
+});
+
+test("a word that contains 'script' doesn't make a serif handwritten (Good Company, Nov 26)", () => {
+  const desc = "Heavy, soft lowercase serif, same as the wordmark. The descriptor line is small, widely letterspaced uppercase sans-serif with a middle dot: 'RECORDS & CDS · MINNEAPOLIS'";
+  assert.equal(resolveFont(desc, "Fraunces").font, "Fraunces");
+  assert.equal(resolveFont("Light, regular-weight sans-serif in sentence case", "Inter").font, "Inter");
+  assert.equal(resolveFont("Loose brush script, like a sign painter", "Inter").font, "Caveat");
+  const gc: IntakeChunks = { ...chunks, "visual-system": { draft: draft([item("type: heading", desc), item("type: body", "Light, regular-weight sans-serif")]) } };
+  const kit = kitFromChunks(gc, { name: "Good Company" });
+  assert.equal(kit.fonts.heading, "Fraunces");
+  assert.equal(kit.fonts.hand, "Inter");
+});
+
+test("fonts named in text: as Google spells them, or squashed together as typed", () => {
+  assert.deepEqual(
+    fontsNamedIn("I specifically want to use Fraunces for headline and PlusJakartaSans for body both google fonts").map((f) => f.family),
+    ["Fraunces", "Plus Jakarta Sans"],
+  );
+  assert.deepEqual(fontsNamedIn("a heavy, soft lowercase serif; play up the plum").map((f) => f.family), []);
+  assert.deepEqual(fontsNamedIn("Set in DM Serif Display").map((f) => f.family), ["DM Serif Display"]);
+});
+
+test("an owner's font answer: a card pick, or typed words naming fonts", () => {
+  assert.deepEqual(ownerFonts("Fonts: Fraunces for headings, Manrope for body text"), { heading: "Fraunces", body: "Manrope" });
+  assert.deepEqual(ownerFonts("Owner wrote: PlusJakartaSans"), { body: "Plus Jakarta Sans" });
+  assert.deepEqual(ownerFonts("Fraunces for headline and PlusJakartaSans for body"), { heading: "Fraunces", body: "Plus Jakarta Sans" });
+  assert.deepEqual(ownerFonts("Use Inter for body text and Fraunces for headlines"), { heading: "Fraunces", body: "Inter" });
+  assert.deepEqual(ownerFonts("Fonts: none of these"), {});
+});
+
+test("the owner's typed font answer reaches the posts, keeping the other role", () => {
+  const items = [item("type: heading", "Heavy, soft serif. The descriptor is a sans."), item("fonts", "Fonts: Fraunces for headings, Inter for body text"), item("fonts", "Owner wrote: PlusJakartaSans")];
+  const kit = kitFromChunks({ ...chunks, "visual-system": { draft: draft(items) } }, { name: "Good Company" });
+  assert.equal(kit.fonts.heading, "Fraunces");
+  assert.equal(kit.fonts.body, "Plus Jakarta Sans");
+  assert.match(googleFontsHref(Object.values(kit.fonts)), /family=Plus\+Jakarta\+Sans:wght@400;700/);
+});
+
+test("uploaded font files: a serif leads, a sans sets the body; a font Google lacks comes from the file", () => {
+  const vis = { draft: draft([item("type: heading", "A tall condensed sans"), item("type: body", "Light sans")]) };
+  const kit = kitFromChunks({ ...chunks, "visual-system": vis }, { name: "Good Company", fonts: [{ family: "Plus Jakarta Sans", google: true }, { family: "Fraunces", google: true }] });
+  assert.equal(kit.fonts.heading, "Fraunces");
+  assert.equal(kit.fonts.body, "Plus Jakarta Sans");
+  const own = kitFromChunks({ ...chunks, "visual-system": vis }, { name: "Good Company", fonts: [{ family: "Brand Serif", google: false }] });
+  assert.equal(own.fonts.heading, "Brand Serif");
+  assert.match(own.notes.join(" "), /font file you uploaded/);
+  // The owner's answer still outranks the files.
+  const answered = kitFromChunks({ ...chunks, "visual-system": { draft: draft([...vis.draft.items, item("fonts", "Fonts: Lora for headings, Inter for body text")]) } }, { name: "x", fonts: [{ family: "Fraunces", google: true }] });
+  assert.equal(answered.fonts.heading, "Lora");
+});
+
+test("font files: family from the file name, format from the first bytes", () => {
+  assert.equal(fontFamilyFromFile("PlusJakartaSans.ttf"), "Plus Jakarta Sans");
+  assert.equal(fontFamilyFromFile("Fraunces[SOFT,WONK,opsz,wght].ttf"), "Fraunces");
+  assert.equal(fontFamilyFromFile("PlusJakartaSans-BoldItalic.woff2"), "Plus Jakarta Sans");
+  assert.equal(fontFamilyFromFile("BrandSerif-Regular.otf"), "Brand Serif");
+  assert.equal(sniffFont(new Uint8Array([0, 1, 0, 0])), "ttf");
+  assert.equal(sniffFont(new TextEncoder().encode("wOF2xxxx")), "woff2");
+  assert.equal(sniffFont(new TextEncoder().encode("%PDF")), null);
+  assert.equal(headingWeightOf("Anton"), 400);
+  assert.equal(headingWeightOf("Fraunces"), 700);
 });
 
 test("body text never gets a handwriting face", () => {
