@@ -210,11 +210,12 @@ const ATTACHED: Partial<Record<UploadKind, string>> = {
 };
 
 /** The read prompt for one upload. Text uploads enter only as escaped data inside <upload>. */
-export function readPrompt(promptText: string, u: { label: string; kind: UploadKind; text?: string; url?: string }) {
+export function readPrompt(promptText: string, u: { label: string; kind: UploadKind; text?: string; url?: string; purpose?: "facts" | "voice" }) {
   const content =
     ATTACHED[u.kind] ??
     (u.kind === "url" ? `Web address to fetch: ${u.url}` : asData(u.text ?? ""));
-  return fillPrompt("read", promptText, { upload: asData(u.label), kind: u.kind, content });
+  const purpose = u.purpose === "voice" ? "The owner marked this file as voice: how the brand sounds. Note its lines and tone; don't record its claims as facts about the business." : u.purpose === "facts" ? "The owner marked this file as facts about the business." : "";
+  return fillPrompt("read", promptText, { upload: asData(u.label), kind: u.kind, content, purpose });
 }
 
 /** The assemble prompt for one target. The evidence travels separately as cached text. */

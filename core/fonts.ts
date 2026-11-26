@@ -151,3 +151,6 @@ export function fontFamilyFromFile(name: string): string {
 export function fontFaceCss(family: string, dataUrl: string, ext: FontExt): string {
   return `@font-face { font-family: "${family.replace(/["\\]/g, "")}"; src: url("${dataUrl}") format("${FONT_FORMATS[ext]}"); font-weight: 100 900; font-display: block; }\n`;
 }
+
+/** Every Google font family, for a name picker. */
+export const googleFamilies = (): string[] => [...fonts().values()].map((f) => f.family).sort((a, b) => a.localeCompare(b));

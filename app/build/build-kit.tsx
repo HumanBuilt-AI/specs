@@ -5,12 +5,14 @@
 // calls (one per upload, then one per kit chunk) because the deployed function is cut off at
 // about 30 seconds, and each answer is shown as soon as it lands.
 import { Working } from "../ui/working.tsx";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LIMITS, charCount } from "../../core/limits.ts";
 import { EXTRACT_CHUNKS, type ChunkDraft, type Conflicts, type Evidence } from "../../core/extract.ts";
 import type { Swatch } from "../../core/colors.ts";
 import { call, callPatiently, pool, sendForm, type ApiError } from "../lib/api.ts";
-import { LOGO_ACCEPT, isSvg, logoProblem, prepareImage } from "../lib/images.ts";
+import { prepareImage } from "../lib/images.ts";
+import { ColorsStep, FontsStep, PhotosStep, StepRail, addFiles, sameFile, type SetupStage } from "./setup-steps.tsx";
+import { guessPurpose, type DocPurpose, type PaletteRole } from "../../core/picks.ts";
 import { Turnstile } from "../lib/turnstile.tsx";
 import Intake from "./intake.tsx";
 import { BrandBoard } from "./brand-board.tsx";
@@ -20,7 +22,7 @@ import MakePosts from "./make-posts.tsx";
 import { ReadingFinds } from "./reading-finds.tsx";
 
 type UploadKindApi = "image" | "logo" | "pdf" | "url" | "pasted" | "note" | "doc" | "font";
-type Upload = { id: string; kind: UploadKindApi; label: string; colors?: Swatch[]; pages?: number };
+type Upload = { id: string; kind: UploadKindApi; label: string; colors?: Swatch[]; pages?: number; family?: string };
 type CallState = { status: "running" | "done" | "failed"; attempts: number };
 type Item = ChunkDraft["items"][number] & { edited?: boolean };
 type ChunkRecord =
@@ -34,10 +36,12 @@ type Kit = {
 };
 
 const SESSION_KEY = "specs.sessionId";
+const stageKey = (sid: string) => `specs.stage.${sid}`;
 const HEX = /#[0-9a-f]{6}\b/gi;
 const KIND_NAME: Record<UploadKindApi, string> = { image: "Photo", logo: "Logo", pdf: "PDF", url: "Website", pasted: "Website text", note: "Note", doc: "Text file", font: "Font" };
-const FONT_FILE = /\.(ttf|otf|woff2?)$/i;
 const DOC_FILE = /\.(txt|md|markdown|json|css|csv)$/i;
+const fileKey = (f: File) => `${f.name}:${f.size}`;
+const PURPOSE_TEXT: Record<DocPurpose, string> = { facts: "Facts", voice: "Voice", skip: "Leave out" };
 
 const STATE_TEXT: Record<string, string> = {
   open: "Open",
@@ -63,7 +67,11 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
   const [logo, setLogo] = useState<File | null>(null);
   const [pdf, setPdf] = useState<File | null>(null);
   const [docs, setDocs] = useState<File[]>([]);
-  const [fontFiles, setFontFiles] = useState<File[]>([]);
+  const [purposes, setPurposes] = useState<Record<string, DocPurpose>>({});
+  const [heroes, setHeroes] = useState<number[]>([]);
+  const [stage, setStageState] = useState<SetupStage>("photos");
+  const [palette, setPalette] = useState<{ role: PaletteRole; hex: string }[] | null>(null);
+  const [fontFiles, setFontFiles] = useState<Record<string, File>>({});
   const [url, setUrl] = useState("");
   const [pasted, setPasted] = useState("");
   const [note, setNote] = useState("");
@@ -97,6 +105,13 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
     setChunks(Object.fromEntries(kit.chunks.map((c) => [c.target, c])));
   }, []);
 
+  const setStage = useCallback((sid: string, next: SetupStage) => {
+    setStageState(next);
+    try {
+      sessionStorage.setItem(stageKey(sid), next);
+    } catch {}
+  }, []);
+
   // Pick up a session after a reload; sessions last a day on the server.
   useEffect(() => {
     let saved: string | null = null;
@@ -104,7 +119,18 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
       saved = sessionStorage.getItem(SESSION_KEY);
     } catch {}
     if (!saved) return;
-    loadKit(saved)
+    let savedStage: string | null = null;
+    try {
+      savedStage = sessionStorage.getItem(stageKey(saved));
+    } catch {}
+    call<Kit>("/api/kit", { sessionId: saved })
+      .then((kit) => {
+        // Sessions from before the steps, or ones already drafting, go straight to the kit.
+        const begun = kit.extraction.locked || Object.keys(kit.extraction.reads).some((id) => kit.uploads.find((u) => u.id === id && u.kind !== "image" && u.kind !== "logo"));
+        const next: SetupStage = begun || (!savedStage && kit.uploads.length) ? "built" : ((savedStage as SetupStage | null) ?? "photos");
+        setStageState(next === "photos" && kit.uploads.length ? "colors" : next);
+        return loadKit(saved!);
+      })
       .then(() => setSessionId(saved))
       .catch(() => {
         try {
@@ -130,6 +156,7 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
     try {
       const d = await call<{ sessionId: string }>("/api/session", { turnstileToken: token });
       setSessionId(d.sessionId);
+      setStage(d.sessionId, "photos");
       try {
         sessionStorage.setItem(SESSION_KEY, d.sessionId);
       } catch {}
@@ -180,78 +207,129 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
     await pool(rest, 4, (t) => draftOne(sid, t));
   }
 
+  // Uploads are read the moment they land, a few at a time, while the owner works through the
+  // next steps. The queue lives across steps so the last one can wait for all of it.
+  const queue = useRef({ slots: READ_AT_ONCE, waiting: [] as (() => void)[], jobs: [] as Promise<void>[], tried: new Set<string>() });
+  const readSoon = (sid: string, u: Upload) => {
+    const q = queue.current;
+    q.tried.add(u.id);
+    q.jobs.push(
+      (async () => {
+        if (q.slots === 0) await new Promise<void>((go) => q.waiting.push(go));
+        q.slots--;
+        try {
+          await readOne(sid, u);
+        } finally {
+          q.slots++;
+          q.waiting.shift()?.();
+        }
+      })(),
+    );
+  };
+  const sendUpload = async (sid: string, fields: Record<string, string | Blob>, thumb?: Blob) => {
+    const d = await sendForm<{ upload: Upload }>("/api/uploads", { sessionId: sid, ...fields });
+    if (thumb) setThumbs((t) => ({ ...t, [d.upload.id]: URL.createObjectURL(thumb) }));
+    setUploads((u) => [...u, d.upload]);
+    // Font files aren't read; posts use them as they are.
+    if (d.upload.kind !== "font") readSoon(sid, d.upload);
+    return d.upload;
+  };
+  /** Runs each upload; one that won't go up (an odd format, a refused size) never stops the rest. */
+  async function each<T>(list: T[], step: (x: T) => Promise<unknown>): Promise<string[]> {
+    const problems: string[] = [];
+    for (const x of list) {
+      try {
+        await step(x);
+      } catch (e) {
+        problems.push(messageOf(e));
+      }
+    }
+    return problems;
+  }
+  const savePicks = (sid: string, picks: Record<string, unknown>) => call("/api/session/picks", { sessionId: sid, picks });
+
+  /** Step 1 done: logo and photos go up (colors are sampled in the browser) and start being read. */
+  async function submitPhotos() {
+    if (!sessionId) return;
+    const sid = sessionId;
+    setError(null);
+    const ids = new Map<File, string>();
+    // A logo dropped in with the photos ("tss-logo.png") is still the logo, when the logo slot is empty.
+    const logoFile = logo ?? photos.find((p) => /logo/i.test(p.name)) ?? null;
+    const problems = await each([...(logoFile ? [logoFile] : []), ...photos.filter((p) => p !== logoFile)], async (f) => {
+      const kind = f === logoFile ? "logo" : "image";
+      setBusy(kind === "logo" ? `Preparing ${f.name}…` : `Shrinking and uploading ${f.name}…`);
+      const { file, colors } = await prepareImage(f, kind);
+      const up = await sendUpload(sid, { kind, file, colors: JSON.stringify(colors) }, file);
+      ids.set(f, up.id);
+    });
+    const heroIds = heroes.map((i) => ids.get(photos[i]!)).filter((x): x is string => !!x);
+    if (heroIds.length) problems.push(...(await each([heroIds], (h) => savePicks(sid, { heroes: h }))));
+    setBusy(null);
+    if (problems.length) setError(problems.join(" "));
+    setStage(sid, "colors");
+  }
+
+  async function submitColors(p: { role: PaletteRole; hex: string }[] | null) {
+    if (!sessionId) return;
+    setError(null);
+    setPalette(p);
+    if (p?.length) {
+      const problems = await each([p], (x) => savePicks(sessionId, { palette: x }));
+      if (problems.length) return setError(problems.join(" "));
+    }
+    setStage(sessionId, "fonts");
+  }
+
+  async function uploadFonts(files: File[]) {
+    if (!sessionId) return;
+    const sid = sessionId;
+    setError(null);
+    const fresh = files.filter((f) => !Object.values(fontFiles).some((h) => sameFile(h, f)));
+    setBusy("Uploading your fonts…");
+    const problems = await each(fresh, async (f) => {
+      const up = await sendUpload(sid, { kind: "font", file: f });
+      if (up.family) setFontFiles((m) => ({ ...m, [up.family!]: f }));
+    });
+    setBusy(null);
+    if (problems.length) setError(problems.join(" "));
+  }
+
+  async function submitFonts(f: { heading: string; body: string } | null) {
+    if (!sessionId) return;
+    setError(null);
+    if (f) {
+      const problems = await each([f], (x) => savePicks(sessionId, { fonts: x }));
+      if (problems.length) return setError(problems.join(" "));
+    }
+    setStage(sessionId, "words");
+  }
+
+  /** The last step: the words go up, then everything is read and the kit is drafted. */
   async function buildKit() {
     if (!sessionId) return;
     setError(null);
     const sid = sessionId;
     const added: Upload[] = [];
-    const problems: string[] = [];
-    const tried = new Set<string>();
     setWorking(true);
     setBusy("Uploading…");
-    // Each upload is read the moment it lands, a few at a time, while the rest are still going up.
-    const reading: Promise<void>[] = [];
-    let slots = READ_AT_ONCE;
-    const waiting: (() => void)[] = [];
-    const readSoon = (u: Upload) => {
-      tried.add(u.id);
-      reading.push(
-        (async () => {
-          if (slots === 0) await new Promise<void>((go) => waiting.push(go));
-          slots--;
-          try {
-            await readOne(sid, u);
-          } finally {
-            slots++;
-            waiting.shift()?.();
-          }
-        })(),
-      );
-    };
-    const send = async (fields: Record<string, string | Blob>, thumb?: Blob) => {
-      const d = await sendForm<{ upload: Upload }>("/api/uploads", { sessionId: sid, ...fields });
-      added.push(d.upload);
-      if (thumb) setThumbs((t) => ({ ...t, [d.upload.id]: URL.createObjectURL(thumb) }));
-      setUploads((u) => [...u, d.upload]);
-      // Font files aren't read; posts use them as they are.
-      if (d.upload.kind !== "font") readSoon(d.upload);
-    };
-    // One file that won't go up (an odd format, a refused size) never stops the rest.
-    const attempt = async (step: () => Promise<void>) => {
-      try {
-        await step();
-      } catch (e) {
-        problems.push(messageOf(e));
-      }
-    };
+    const keep = (u: Upload) => (added.push(u), u);
     try {
-      // Words first: they go up instantly, so reading starts while photos are still being shrunk.
-      if (note.trim()) await attempt(() => send({ kind: "note", text: note }));
-      if (pasted.trim()) await attempt(() => send({ kind: "pasted", text: pasted }));
-      if (url.trim()) await attempt(() => send({ kind: "url", url: url.trim() }));
-      for (const f of docs) await attempt(() => send({ kind: "doc", file: f }));
-      for (const f of fontFiles) await attempt(() => send({ kind: "font", file: f }));
-      if (pdf) await attempt(() => send({ kind: "pdf", file: pdf }));
-      // A logo dropped in with the photos ("tss-logo.png") is still the logo, when the logo slot is empty.
-      const logoFile = logo ?? photos.find((p) => /logo/i.test(p.name)) ?? null;
-      if (logoFile) {
-        setBusy(`Preparing and uploading ${logoFile.name}…`);
-        await attempt(async () => {
-          const { file, colors } = await prepareImage(logoFile, "logo");
-          await send({ kind: "logo", file, colors: JSON.stringify(colors) }, file);
-        });
-      }
-      for (const p of photos.filter((p) => p !== logoFile)) {
-        setBusy(`Shrinking and uploading ${p.name}…`);
-        await attempt(async () => {
-          const { file, colors } = await prepareImage(p, "image");
-          await send({ kind: "image", file, colors: JSON.stringify(colors) }, file);
-        });
-      }
+      const words: Record<string, string | Blob>[] = [
+        ...(note.trim() ? [{ kind: "note", text: note }] : []),
+        ...(pasted.trim() ? [{ kind: "pasted", text: pasted }] : []),
+        ...(url.trim() ? [{ kind: "url", url: url.trim() }] : []),
+        ...docs.filter((f) => (purposes[fileKey(f)] ?? guessPurpose(f.name)) !== "skip").map((f) => ({ kind: "doc", file: f, purpose: purposes[fileKey(f)] ?? guessPurpose(f.name) })),
+        ...(pdf ? [{ kind: "pdf", file: pdf }] : []),
+      ];
+      const problems = await each(words, async (fields) => keep(await sendUpload(sid, fields)));
       setBusy(null);
-      if (problems.length) setError(`${problems.join(" ")}${added.length ? " Building from the rest." : ""}`);
-      await Promise.all(reading);
-      if (added.length) await readAndDraftSteps(sid, [...uploads, ...added], tried);
+      const all = [...uploads, ...added];
+      if (problems.length) setError(`${problems.join(" ")}${all.length ? " Building from the rest." : ""}`);
+      setStage(sid, "built");
+      await Promise.all(queue.current.jobs);
+      if (all.some((u) => u.kind !== "font")) await readAndDraftSteps(sid, all, queue.current.tried);
+      else setError("There's nothing to read yet. Add a photo, a file or a few words about the business.");
     } finally {
       setBusy(null);
       setWorking(false);
@@ -299,8 +377,12 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
 
   // ---------- view ----------
 
-  const started = uploads.length > 0;
-  const nothingChosen = !photos.length && !logo && !pdf && !docs.length && !url.trim() && !pasted.trim() && !note.trim();
+  const started = stage === "built";
+  const nothingChosen = !uploads.some((u) => u.kind !== "font") && !pdf && !docs.length && !url.trim() && !pasted.trim() && !note.trim();
+  const photoReads = uploads.filter((u) => u.kind === "image" || u.kind === "logo");
+  const colorSources = useMemo(() => uploads.filter((u) => (u.kind === "logo" || u.kind === "image") && u.colors?.length).map((u) => ({ kind: u.kind as "logo" | "image", colors: u.colors! })), [uploads]);
+  const uploadedFonts = useMemo(() => uploads.filter((u) => u.kind === "font" && u.family).map((u) => ({ family: u.family!, file: fontFiles[u.family!] })), [uploads, fontFiles]);
+  const roleHex = (r: PaletteRole) => palette?.find((p) => p.role === r)?.hex;
   const tooLong = charCount(note) > LIMITS.messageChars || charCount(pasted) > LIMITS.pastedChars;
   // The gaps step starts once every chunk has finished drafting (or used up its tries).
   const targetIds = [...EXTRACT_CHUNKS.map((c) => c.id as string), "conflicts"];
@@ -321,34 +403,14 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
   }, [chunks]);
   const name = businessNameOf(intakeChunks);
 
-  /** Dropped files go where they belong: images to photos, a PDF to the PDF slot. */
+  /** The words step takes text files and one PDF; anything else is named so nothing vanishes. */
   function onDrop(files: File[]) {
-    // An SVG, or an image named like a logo, goes to the logo slot; other images are photos.
-    const logoLike = files.find((f) => isSvg(f) || (/^image\//.test(f.type) && /logo|wordmark|lockup/i.test(f.name)));
-    const images = files.filter((f) => f !== logoLike && /^image\/(jpeg|png|webp|gif|avif|heic|heif)$/.test(f.type));
     const pdfs = files.filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
-    const fontsIn = files.filter((f) => FONT_FILE.test(f.name));
     const docsIn = files.filter((f) => DOC_FILE.test(f.name));
-    if (fontsIn.length) setFontFiles((p) => [...p, ...fontsIn].slice(0, LIMITS.fontCount));
-    if (docsIn.length) setDocs((p) => [...p, ...docsIn].slice(0, LIMITS.docCount));
-    const design = files.map(logoProblem).find((p) => p && !/\.pdf/i.test(p));
-    if (logoLike) setLogo(logoLike);
-    if (images.length) setPhotos((p) => [...p, ...images].slice(0, LIMITS.imageCount));
+    if (docsIn.length) setDocs((p) => addFiles(p, docsIn, LIMITS.docCount));
     if (pdfs[0]) setPdf(pdfs[0]);
-    const left = files.length - (logoLike ? 1 : 0) - images.length - Math.min(1, pdfs.length) - fontsIn.length - docsIn.length;
-    if (design) setError(design);
-    else if (left > 0) setError(`Specs takes photos, one logo (SVG, PNG, JPEG or WebP), one PDF, text files (.txt, .md, .json, .css) and font files (.ttf, .otf, .woff, .woff2). ${left} ${left === 1 ? "file was" : "files were"} left out.`);
-    else setError(null);
-  }
-
-  function pickLogo(f: File | null) {
-    const problem = f && logoProblem(f);
-    if (problem) {
-      setError(problem);
-      return;
-    }
-    setError(null);
-    setLogo(f);
+    const left = files.length - Math.min(1, pdfs.length) - docsIn.length;
+    setError(left > 0 ? `This step takes text files (.txt, .md, .json, .css) and one PDF. ${left} ${left === 1 ? "file was" : "files were"} left out.` : null);
   }
 
   return (
@@ -374,9 +436,28 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
       )}
 
       {sessionId && !started && (
-        <div className="card">
-          <h2 style={{ marginTop: 0 }}>Your materials</h2>
-          <p className="muted">Whatever you have. Messy is fine: that&rsquo;s the point.</p>
+        <StepRail stage={stage} reading={stage !== "photos" ? { done: photoReads.filter((u) => reads[u.id]?.status === "done").length, total: photoReads.length } : undefined} />
+      )}
+      {sessionId && stage === "photos" && (
+        <PhotosStep logo={logo} photos={photos} heroes={heroes} busy={!!busy} onLogo={setLogo} onPhotos={setPhotos} onHeroes={setHeroes} onError={setError} onNext={submitPhotos} />
+      )}
+      {sessionId && stage === "colors" && <ColorsStep sources={colorSources} busy={!!busy} onDone={submitColors} />}
+      {sessionId && stage === "fonts" && (
+        <FontsStep
+          colors={{ bg: roleHex("background") ?? "#F5F3EF", text: roleHex("text") ?? "#141414", head: roleHex("headings") ?? roleHex("text") ?? "#141414", accent: roleHex("accent") ?? null }}
+          name=""
+          uploaded={uploadedFonts}
+          busy={!!busy}
+          onUpload={uploadFonts}
+          onDone={submitFonts}
+        />
+      )}
+      {sessionId && stage === "words" && (
+        <div className="card setup-step">
+          <h2 className="step-title">
+            Your words. <span>Messy is fine: that&rsquo;s the point.</span>
+          </h2>
+          <p className="muted">Facts and voice come from here: what you sell, prices, hours, how you talk. Specs reads these while you wait, then asks only what it can&rsquo;t settle.</p>
 
           <div
             className={`dropzone ${dragging ? "over" : ""}`}
@@ -391,84 +472,52 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
               onDrop([...e.dataTransfer.files]);
             }}
           >
-            <p className="dropzone-title">Drop photos, a logo, a PDF, text files and fonts here</p>
+            <p className="dropzone-title">Drop text files or a PDF here</p>
             <p className="muted small">
-              Up to {LIMITS.imageCount} photos, one logo (SVG or PNG is best), one PDF of up to {LIMITS.pdfPages} pages, {LIMITS.docCount} text files (notes, a brand file) and {LIMITS.fontCount} font files. Images are shrunk in your browser before upload.
+              Up to {LIMITS.docCount} text files (notes, a brand file) and one PDF of up to {LIMITS.pdfPages} pages.
             </p>
             <div className="dropzone-pick">
-              <label htmlFor="photos" className="c-btn ghost">
-                Choose photos
+              <label htmlFor="docs" className="c-btn ghost">
+                Text files
               </label>
-              <input id="photos" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/heic,image/heif,.heic,.heif" multiple onChange={(e) => setPhotos((p) => [...p, ...(e.target.files ?? [])].slice(0, LIMITS.imageCount))} />
-              <label htmlFor="logo" className="c-btn ghost">
-                Choose a logo
-              </label>
-              <input id="logo" className="visually-hidden" type="file" accept={LOGO_ACCEPT} onChange={(e) => pickLogo(e.target.files?.[0] ?? null)} />
+              <input id="docs" className="visually-hidden" type="file" accept=".txt,.md,.markdown,.json,.css,.csv,text/plain,text/markdown,application/json,text/css" multiple onChange={(e) => setDocs((p) => addFiles(p, [...(e.target.files ?? [])], LIMITS.docCount))} />
               <label htmlFor="pdf" className="c-btn ghost">
                 Choose a PDF
               </label>
               <input id="pdf" className="visually-hidden" type="file" accept="application/pdf" onChange={(e) => setPdf(e.target.files?.[0] ?? null)} />
-              <label htmlFor="docs" className="c-btn ghost">
-                Text files
-              </label>
-              <input id="docs" className="visually-hidden" type="file" accept=".txt,.md,.markdown,.json,.css,.csv,text/plain,text/markdown,application/json,text/css" multiple onChange={(e) => setDocs((p) => [...p, ...(e.target.files ?? [])].slice(0, LIMITS.docCount))} />
-              <label htmlFor="fonts" className="c-btn ghost">
-                Fonts
-              </label>
-              <input id="fonts" className="visually-hidden" type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" multiple onChange={(e) => setFontFiles((p) => [...p, ...(e.target.files ?? [])].slice(0, LIMITS.fontCount))} />
             </div>
-            {(photos.length > 0 || pdf || logo || docs.length > 0 || fontFiles.length > 0) && (
-              <ul className="dropped">
-                {logo && (
-                  <li>
-                    <span>
-                      {logo.name} <span className="muted small">logo</span>
-                    </span>
-                    <button type="button" className="quiet" aria-label={`Remove ${logo.name}`} onClick={() => setLogo(null)}>
-                      Remove
-                    </button>
-                  </li>
-                )}
-                {photos.map((p, i) => (
-                  <li key={`${p.name}-${i}`}>
-                    <span>{p.name}</span>
-                    <button type="button" className="quiet" aria-label={`Remove ${p.name}`} onClick={() => setPhotos((ps) => ps.filter((_, j) => j !== i))}>
-                      Remove
-                    </button>
-                  </li>
-                ))}
-                {docs.map((f, i) => (
-                  <li key={`doc-${f.name}-${i}`}>
-                    <span>
-                      {f.name} <span className="muted small">text</span>
+          </div>
+          {(docs.length > 0 || pdf) && (
+            <ul className="dropped">
+              {docs.map((f, i) => {
+                const purpose = purposes[fileKey(f)] ?? guessPurpose(f.name);
+                return (
+                  <li key={fileKey(f)}>
+                    <span className={purpose === "skip" ? "muted" : ""}>{f.name}</span>
+                    <span className="purpose" role="radiogroup" aria-label={`What ${f.name} is for`}>
+                      {(["facts", "voice", "skip"] as const).map((p) => (
+                        <button key={p} type="button" role="radio" aria-checked={purpose === p} className={`c-chip ${purpose === p ? "on" : ""}`} onClick={() => setPurposes((m) => ({ ...m, [fileKey(f)]: p }))}>
+                          {PURPOSE_TEXT[p]}
+                        </button>
+                      ))}
                     </span>
                     <button type="button" className="quiet" aria-label={`Remove ${f.name}`} onClick={() => setDocs((ds) => ds.filter((_, j) => j !== i))}>
                       Remove
                     </button>
                   </li>
-                ))}
-                {fontFiles.map((f, i) => (
-                  <li key={`font-${f.name}-${i}`}>
-                    <span>
-                      {f.name} <span className="muted small">font</span>
-                    </span>
-                    <button type="button" className="quiet" aria-label={`Remove ${f.name}`} onClick={() => setFontFiles((fs) => fs.filter((_, j) => j !== i))}>
-                      Remove
-                    </button>
-                  </li>
-                ))}
-                {pdf && (
-                  <li>
-                    <span>{pdf.name}</span>
-                    <button type="button" className="quiet" aria-label={`Remove ${pdf.name}`} onClick={() => setPdf(null)}>
-                      Remove
-                    </button>
-                  </li>
-                )}
-              </ul>
-            )}
-          </div>
-
+                );
+              })}
+              {pdf && (
+                <li>
+                  <span>{pdf.name}</span>
+                  <button type="button" className="quiet" aria-label={`Remove ${pdf.name}`} onClick={() => setPdf(null)}>
+                    Remove
+                  </button>
+                </li>
+              )}
+            </ul>
+          )}
+          {docs.some((f) => (purposes[fileKey(f)] ?? guessPurpose(f.name)) === "skip") && <p className="muted small">Files marked Leave out aren&rsquo;t uploaded. Prompts written for an image tool start there, since they aren&rsquo;t about your business.</p>}
 
           <label htmlFor="url">Website</label>
           <input id="url" type="url" placeholder="https://" value={url} onChange={(e) => setUrl(e.target.value)} />
@@ -486,9 +535,14 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
             {charCount(note)} / {LIMITS.messageChars}
           </p>
 
-          <button onClick={buildKit} aria-busy={!!busy} disabled={nothingChosen || tooLong || !!busy}>
-            Build my kit
-          </button>
+          <div className="step-actions">
+            <button onClick={buildKit} aria-busy={!!busy} disabled={nothingChosen || tooLong || !!busy}>
+              Build my kit
+            </button>
+            <button className="c-btn ghost" onClick={() => setStage(sessionId, "fonts")} disabled={!!busy}>
+              Back to fonts
+            </button>
+          </div>
         </div>
       )}
 

@@ -66,12 +66,16 @@ function pickColors(items: IntakeItem[], notes: string[]) {
   const headingPick = hexes(paletteValue.match(/;\s*headings?\s+(#[0-9a-f]{6})/i)?.[1] ?? "")[0];
   const any = [...new Set(items.filter((i) => i.label.toLowerCase().startsWith("color")).flatMap((i) => hexes(i.value)))];
   const pool = palette.length ? palette : any;
+  // A palette set by role ("Palette: background #…, text #…, headings #…, accent #…, extra #…").
+  const tagged = (r: string) => hexes(paletteValue.match(new RegExp(`\\b${r}\\s+(#[0-9a-f]{6})`, "i"))?.[1] ?? "")[0];
+  const byRole = !!tagged("background");
 
   // An owner's palette answer outranks the draft's role guesses.
-  let background = (palette.length ? palette[0] : role("color: background")) ?? pool[0] ?? "#F5F3EF";
-  let text = (palette.length ? undefined : role("color: body_text")) ?? [...pool].filter((h) => h !== background).sort((a, b) => contrast(b, background) - contrast(a, background))[0] ?? bestInk(background);
-  const heading0 = headingPick ?? (palette.length ? undefined : role("color: heading")) ?? text;
+  let background = (palette.length ? (byRole ? tagged("background") : palette[0]) : role("color: background")) ?? pool[0] ?? "#F5F3EF";
+  let text = (byRole ? tagged("text") : palette.length ? undefined : role("color: body_text")) ?? [...pool].filter((h) => h !== background).sort((a, b) => contrast(b, background) - contrast(a, background))[0] ?? bestInk(background);
+  const heading0 = headingPick ?? (byRole ? tagged("headings") : undefined) ?? (palette.length ? undefined : role("color: heading")) ?? text;
   const accent0 =
+    (byRole ? tagged("accent") : undefined) ??
     (palette.length ? undefined : role("color: accent")) ??
     [...pool].filter((h) => h !== background && h !== text).sort((a, b) => saturation(b) - saturation(a))[0] ??
     text;
@@ -89,11 +93,13 @@ function pickColors(items: IntakeItem[], notes: string[]) {
   // it: a colorful hue clearly different from the heading and accent, readable on the background.
   const used = [background, text, heading, accent];
   const accent2 =
+    (byRole ? tagged("extra") : undefined) ??
     [...pool]
       .filter((h) => !used.includes(h) && saturation(h) >= 0.35 && used.filter((u) => saturation(u) >= 0.35).every((u) => hueGap(h, u) >= 40) && contrast(h, background) >= 3)
       .sort((a, b) => saturation(b) - saturation(a))[0] ?? null;
   // The owner named a headline color and it reads on the background: posts must use it.
-  const headingPinned = !!headingPick && heading === headingPick;
+  const pinned = headingPick ?? (byRole ? tagged("headings") : undefined);
+  const headingPinned = !!pinned && heading === pinned;
   return { background, text, heading, accent, label, accent2, headingPinned };
 }
 

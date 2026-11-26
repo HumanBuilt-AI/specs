@@ -25,5 +25,6 @@ Rules:
 <upload name="{{upload}}" kind="{{kind}}">
 {{content}}
 </upload>
+{{purpose}}
 
 Write the evidence notes for this upload.
