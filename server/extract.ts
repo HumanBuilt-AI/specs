@@ -31,6 +31,7 @@ import { Refusal, json, readJson } from "./http.ts";
 import { assertGenerationOpen } from "./spend.ts";
 import { loadSession, updateSession, type CallState, type ExtractionState, type Session, type UploadRecord } from "./sessions.ts";
 import { update } from "./store.ts";
+import { PICKS_SOURCE, picksItems, picksStatements } from "../core/picks.ts";
 import { guardedCall, notBilled, parseBody, id, type Deps } from "./handlers.ts";
 
 // ---------- storage ----------
@@ -122,7 +123,7 @@ export async function readUpload(req: Request, deps: Deps) {
 
     if (up.kind === "font") throw new Refusal(400, "not_read", "Font files aren't read; posts use them as they are.");
     const text = up.kind === "pasted" || up.kind === "note" || up.kind === "doc" ? new TextDecoder().decode(bytes!) : undefined;
-    const prompt = readPrompt(CONTENT.prompts.read, { label: up.label ?? kind, kind, text, url: up.url });
+    const prompt = readPrompt(CONTENT.prompts.read, { label: up.label ?? kind, kind, text, url: up.url, purpose: up.purpose });
     const images: Image[] = up.kind === "image" || up.kind === "logo" ? [{ mediaType: up.mediaType as Image["mediaType"], base64: base64(bytes!) }] : [];
     const documents = up.kind === "pdf" ? [{ base64: base64(bytes!) }] : [];
     const fetchDomain = up.kind === "url" ? new URL(up.url!).hostname : undefined;
@@ -155,6 +156,11 @@ async function loadEvidence(deps: Deps, s: Session) {
     if (s.extraction?.reads[u.id]?.status !== "done") continue;
     const rec = (await deps.kv.get<EvidenceRecord>(evidenceKey(s.id, u.id)))?.value;
     if (rec) notes.push(rec);
+  }
+  // What the owner set before reading counts as evidence too, so drafted chunks agree with it.
+  const said = picksStatements(s.picks ?? {}, (id) => s.uploads.find((u) => u.id === id)?.label);
+  if (said.length) {
+    notes.push({ uploadId: "owner", upload: PICKS_SOURCE.upload, kind: "note", evidence: { summary: "What the owner set in Specs before their uploads were read.", facts: said.map((statement) => ({ topic: "visual" as const, statement, quote: null, location: PICKS_SOURCE.location })), lines: [] } });
   }
   const sampled: SampledColors[] = s.uploads.filter((u) => u.colors?.length).map((u) => ({ upload: u.label ?? "photo", colors: u.colors! }));
   return { notes, sampled };
@@ -194,11 +200,26 @@ export async function assemble(req: Request, deps: Deps) {
       const { data } = await guardedCall(deps, "assemble", { ...prompt, ...extras }, ChunkDraftSchema, approxTokens(prompt.system + prompt.user + evidenceText));
       const sourced = checkSources(data, labels);
       const hexed = checkHexes(sourced.draft, evidenceText, sampled);
-      record = { target: body.target, draft: hexed.draft, warnings: [...sourced.warnings, ...hexed.warnings] };
+      record = { target: body.target, draft: withPicks(hexed.draft, body.target, session), warnings: [...sourced.warnings, ...hexed.warnings] };
     }
     await deps.kv.put(chunkKey(body.sessionId, body.target), record, { ifNew: true });
     return json(record);
   });
+}
+
+/**
+ * The owner's picks go first in their chunk, exactly as set; the model's items follow. Its own
+ * palette or font items are dropped, since the owner already said (later answers still win,
+ * because the kit reads the latest item).
+ */
+function withPicks(draft: ChunkDraft, target: Exclude<AssembleTarget, "conflicts">, s: Session): ChunkDraft {
+  const picked = picksItems(s.picks ?? {}, (id) => s.uploads.find((u) => u.id === id)?.label)[target];
+  if (!picked?.length) return draft;
+  const owns = (label: string) => {
+    const l = label.toLowerCase();
+    return picked.some((p) => (p.label === "palette" && (l.startsWith("palette") || l.startsWith("color"))) || (p.label === "fonts" && (l.startsWith("fonts") || l.startsWith("type: heading") || l.startsWith("type: body"))) || (p.label === "hero_photos" && l.startsWith("hero")));
+  };
+  return { ...draft, items: [...picked, ...draft.items.filter((i) => !owns(i.label))] };
 }
 
 // ---------- the kit so far ----------

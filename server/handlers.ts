@@ -22,6 +22,7 @@ import { kitFor } from "./kit-source.ts";
 import { checkDoc, checkFont, checkImage, checkPdf, checkUrl } from "./uploads.ts";
 import { uploadLabel, type UploadKind } from "../core/extract.ts";
 import { isHex } from "../core/colors.ts";
+import { PicksSchema } from "../core/picks.ts";
 
 export type Deps = { kv: KV; settings: Settings; now: () => Date; verifyTurnstile: VerifyTurnstile; callStep: CallStep };
 
@@ -141,7 +142,7 @@ export async function startSession(req: Request, deps: Deps) {
   );
 }
 
-const UPLOAD_FIELDS = new Set(["sessionId", "kind", "file", "url", "text", "colors"]);
+const UPLOAD_FIELDS = new Set(["sessionId", "kind", "file", "url", "text", "colors", "purpose"]);
 // The biggest file plus room for the form's other fields.
 const MAX_UPLOAD_BODY = Math.max(LIMITS.imageBytes, LIMITS.pdfBytes) + 64 * 1024;
 
@@ -228,7 +229,9 @@ export async function upload(req: Request, deps: Deps) {
       stored = await file.arrayBuffer();
     } else {
       const { text: docText, ...rest } = await checkDoc(file);
-      record = { id: uploadId, kind, label, ...rest };
+      const purpose = form.get("purpose");
+      if (purpose !== null && purpose !== "facts" && purpose !== "voice") throw new Refusal(400, "bad_fields", `"purpose" must be "facts" or "voice".`);
+      record = { id: uploadId, kind, label, ...rest, ...(purpose ? { purpose } : {}) };
       stored = new TextEncoder().encode(docText).buffer as ArrayBuffer;
     }
   } else if (kind === "url") {
@@ -244,6 +247,7 @@ export async function upload(req: Request, deps: Deps) {
   } else {
     throw new Refusal(400, "bad_fields", `"kind" must be "image", "logo", "pdf", "doc", "font", "url", "pasted" or "note".`);
   }
+  if (kind !== "doc" && form.has("purpose")) throw new Refusal(400, "unexpected_fields", `"purpose" only goes with a text file.`);
   if (kind !== "image" && kind !== "logo" && form.has("colors")) throw new Refusal(400, "unexpected_fields", `"colors" only goes with a photo or logo.`);
 
   const sessionId = String(form.get("sessionId") ?? "");
@@ -385,3 +389,24 @@ const remaining = (posts: number, regens: number) => ({
   postsLeft: LIMITS.postsPerSession - posts,
   regenerationsLeft: LIMITS.regenerationsPerSession - regens,
 });
+
+// ---------- what the owner sets before reading ----------
+
+const PicksBody = z.strictObject({ sessionId: id, picks: PicksSchema });
+
+/**
+ * Saves the hero photos, palette or fonts the owner set (each step sends its own part; later
+ * parts are merged in). No model call. Only before drafting starts: after that, the chat and the
+ * intake calls change the kit instead.
+ */
+export async function savePicks(req: Request, deps: Deps) {
+  const body = parseBody(PicksBody, await readJson(req, LIMITS.jsonBodyBytes));
+  await loadSession(deps.kv, body.sessionId, deps.now());
+  const s = await updateSession(deps.kv, body.sessionId, (s) => {
+    if (s.extraction?.locked) throw new Refusal(409, "extraction_started", "The kit is already being drafted. Change colors or fonts in the chat instead.");
+    const photos = new Set(s.uploads.filter((u) => u.kind === "image").map((u) => u.id));
+    if (body.picks.heroes?.some((h) => !photos.has(h))) throw new Refusal(400, "bad_fields", "A starred photo isn't one of this session's photos.");
+    return { ...s, picks: { ...s.picks, ...body.picks } };
+  });
+  return json({ picks: s.picks });
+}

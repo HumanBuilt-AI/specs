@@ -3,6 +3,7 @@
 import "server-only";
 import { LIMITS, type PostIntent } from "../core/limits.ts";
 import type { Plan, Written } from "../core/schemas.ts";
+import type { Picks } from "../core/picks.ts";
 import type { DemoBrandId } from "./generated/content.ts";
 import type { Brief } from "./pipeline.ts";
 import { Refusal } from "./http.ts";
@@ -31,6 +32,8 @@ export type UploadRecord = {
   /** A font file's family ("Plus Jakarta Sans") and format. */
   family?: string;
   fontExt?: "ttf" | "otf" | "woff" | "woff2";
+  /** What the owner says a text file is for: facts about the business, or the voice to copy. */
+  purpose?: "facts" | "voice";
   /** Display name, also how extraction cites it: the cleaned file name, the site, or "note". */
   label?: string;
   bytes?: number;
@@ -64,6 +67,8 @@ export type Session = {
   uploads: UploadRecord[];
   posts: Record<string, PostRecord>;
   extraction?: ExtractionState;
+  /** Hero photos, palette and fonts the owner set before anything was read (core/picks.ts). */
+  picks?: Picks;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

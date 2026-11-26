@@ -13,6 +13,7 @@
 // Pure: no file access.
 import { EXTRACT_CHUNKS, type ChunkDraft, type Confidence, type ConflictTopic, type ExtractChunkId } from "./extract.ts";
 import type { Gap, IntakeChunks } from "./intake.ts";
+import { isPicked } from "./picks.ts";
 
 /** At most this many calls are put to the owner up front. Undo can add one back. */
 export const ASK_CAP = 5;
@@ -136,12 +137,18 @@ export function triage(gaps: Gap[], chunks: IntakeChunks): Plan {
     return false;
   };
 
+  // What the owner set before reading (palette, fonts, hero photos) is never asked again.
+  const ownerSet = setUpFront(chunks);
   const groupsAsked = new Set<Group>();
   // Within a pull: conflicts, then the look and the voice (every post shows them), then the
   // business basics, then photos (the planner picks photos well without an answer).
   const rank = (g: Triaged) => (g.kind === "conflict" ? 0 : g.group === "palette" ? 1 : g.group === "fonts" ? 2 : g.group === "voice" ? 3 : g.group === "photos" ? 5 : 4);
   const ranked = [...open].sort((a, b) => b.pull - a.pull || rank(a) - rank(b));
   for (const g of ranked) {
+    if (g.group && ownerSet.has(g.group)) {
+      plan.skip.push(g.id);
+      continue;
+    }
     const risky = g.kind === "conflict" ? settledSide(g, chunks) === null : g.pull === 3 || g.kind === "missing" || g.group !== null;
     const wantsAsk = g.pull >= 2 && risky;
     if (wantsAsk && g.group && groupsAsked.has(g.group)) {
@@ -157,6 +164,18 @@ export function triage(gaps: Gap[], chunks: IntakeChunks): Plan {
     if (!settle(g)) plan.skip.push(g.id);
   }
   return plan;
+}
+
+/** The groups the owner already set before reading: their items carry the picks source. */
+export function setUpFront(chunks: IntakeChunks): Set<Group> {
+  const out = new Set<Group>();
+  for (const item of chunks["visual-system"]?.draft.items ?? []) {
+    if (!isPicked(item)) continue;
+    if (item.label === "palette") out.add("palette");
+    if (item.label === "fonts") out.add("fonts");
+  }
+  if (chunks["art-direction"]?.draft.items.some((i) => isPicked(i) && i.label === "hero_photos")) out.add("photos");
+  return out;
 }
 
 /** How many separate calls a list of gap ids makes: grouped gaps count once. */
