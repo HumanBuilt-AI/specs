@@ -11,7 +11,9 @@
 // Every finished take is read back by Claude and judged in code (core/poster.ts), exactly as the
 // app's poster job does. Writes output/speed-<run-id>/index.html with the images, times and results.
 //
-// Usage: npm run spike -- spike/speed.ts [--model gpt-image-1.5]
+// Usage: npm run spike -- spike/speed.ts [--model gpt-image-1.5] [--takes low,high,low-streamed] [--serial]
+//   --takes picks the takes by label (low, medium, high, each with -1/-2/… or -streamed); the default is all six above.
+//   --serial paints them one after another, so they don't slow each other down.
 // Needs ANTHROPIC_API_KEY and OPENAI_API_KEY in .env. Neither is logged. About $1–1.50.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative, extname } from "node:path";
@@ -30,6 +32,9 @@ const SIZE = "1024x1536";
 const args = process.argv.slice(2);
 const mi = args.indexOf("--model");
 const MODEL = mi >= 0 ? args[mi + 1] ?? null : null;
+const ti = args.indexOf("--takes");
+const TAKES = ti >= 0 ? (args[ti + 1] ?? "").split(",").map((t) => t.trim()).filter(Boolean) : null;
+const SERIAL = args.includes("--serial");
 const KEY = process.env.OPENAI_API_KEY;
 if (!KEY) throw new Error("OPENAI_API_KEY is missing from .env.");
 
@@ -74,15 +79,13 @@ const p = loadPrompt("poster-full", { business_name: briefs.business_name, inten
 const text = `${p.system}\n\n${p.user}`;
 
 type Job = { label: string; quality: "low" | "medium" | "high"; stream?: boolean };
-const jobs: Job[] = [
-  { label: "low", quality: "low" },
-  { label: "medium-1", quality: "medium" },
-  { label: "medium-2", quality: "medium" },
-  { label: "medium-3", quality: "medium" },
-  { label: "high", quality: "high" },
-  { label: "medium-streamed", quality: "medium", stream: true },
-];
-type Result = { label: string; quality: string; model?: string; paintS?: number; firstPartialS?: number; partials: string[]; file?: string; readS?: number; doneS?: number; verdict?: PosterVerdict; error?: string };
+const DEFAULT_TAKES = ["low", "medium-1", "medium-2", "medium-3", "high", "medium-streamed"];
+const jobs: Job[] = (TAKES ?? DEFAULT_TAKES).map((label) => {
+  const quality = label.split("-")[0];
+  if (quality !== "low" && quality !== "medium" && quality !== "high") throw new Error(`Unknown take "${label}": start it with low, medium or high.`);
+  return { label, quality, stream: label.endsWith("-streamed") };
+});
+type Result = { label: string; quality: string; model?: string; paintS?: number; firstPartialS?: number; partials: string[]; events?: string[]; file?: string; readS?: number; doneS?: number; verdict?: PosterVerdict; error?: string };
 
 async function readBack(pngAbs: string): Promise<PosterVerdict> {
   const rp = loadPrompt("read-back", { copy: copyText, photo_line: "The owner's photo is the third." });
@@ -94,13 +97,12 @@ async function readBack(pngAbs: string): Promise<PosterVerdict> {
 
 const t0 = Date.now();
 const since = () => (Date.now() - t0) / 1000;
-console.log(`Painting ${jobs.length} takes at once (${SIZE})…`);
-const results = await Promise.all(
-  jobs.map(async (j): Promise<Result> => {
+console.log(`Painting ${jobs.length} takes ${SERIAL ? "one after another" : "at once"} (${SIZE})…`);
+const runJob = async (j: Job): Promise<Result> => {
     const r: Result = { label: j.label, quality: j.quality, partials: [] };
     const paint = await paintOpenAI({
       apiKey: KEY, text, images: [photoImg, logoImg, ...refImgs], aspect: "4:5", model: MODEL, size: SIZE, quality: j.quality,
-      ...(j.stream ? { partials: 2, onPartial: (x: { index: number; base64: string; seconds: number }) => {
+      ...(j.stream ? { partials: 2, onEvent: (type: string, s: number) => (r.events ??= []).push(`${type} at ${s.toFixed(1)} s`), onPartial: (x: { index: number; base64: string; seconds: number }) => {
         r.firstPartialS ??= Math.round(x.seconds * 10) / 10;
         const f = `${j.label}-partial-${x.index}.png`;
         writeFileSync(join(runDir, f), Buffer.from(x.base64, "base64"));
@@ -121,9 +123,12 @@ const results = await Promise.all(
     r.readS = Math.round((Date.now() - rs) / 100) / 10;
     r.doneS = Math.round(since());
     console.log(`  ${j.label}: painted in ${r.paintS} s${r.firstPartialS ? ` (first preview ${r.firstPartialS} s)` : ""}, read back in ${r.readS} s, ${r.verdict?.pass ? "PASSED" : "failed"}${r.verdict && !r.verdict.pass ? `: ${r.verdict.problems.join("; ")}` : ""}`);
+    if (r.events) console.log(`    stream events: ${r.events.join(", ") || "none"}`);
     return r;
-  }),
-);
+};
+const results: Result[] = [];
+if (SERIAL) for (const j of jobs) results.push(await runJob(j));
+else results.push(...(await Promise.all(jobs.map(runJob))));
 await browser.close();
 
 const mediums = results.filter((r) => r.label.startsWith("medium-") && r.label !== "medium-streamed");

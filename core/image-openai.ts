@@ -22,6 +22,8 @@ export async function paintOpenAI(opts: {
   /** Streams the painting and calls this with each rough version as it arrives (1–3 of them), seconds since the call began. */
   onPartial?: (p: { index: number; base64: string; seconds: number }) => void;
   partials?: number;
+  /** Streamed calls only: each server event's type as it arrives (no image data), for timing and debugging. */
+  onEvent?: (type: string, seconds: number) => void;
 }): Promise<SketchResult> {
   const doFetch = opts.fetchImpl ?? fetch;
   // The closest sizes the models take; code scales the result to the canvas.
@@ -74,6 +76,7 @@ export async function paintOpenAI(opts: {
           const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("");
           if (!data || data === "[DONE]") continue;
           const ev = JSON.parse(data) as { type?: string; b64_json?: string; partial_image_index?: number };
+          opts.onEvent?.(ev.type ?? "unknown", (Date.now() - started) / 1000);
           if (ev.type?.endsWith("partial_image") && ev.b64_json) opts.onPartial!({ index: ev.partial_image_index ?? 0, base64: ev.b64_json, seconds: (Date.now() - started) / 1000 });
           if (ev.type?.endsWith("completed") && ev.b64_json) b64 = ev.b64_json;
         }
