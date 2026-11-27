@@ -10,7 +10,7 @@ export const PosterReadSchema = z.object({
   photo_text: z.array(z.string()).describe("Text that was already in the owner's photo (its signs) and still is, inside the photo on the poster."),
   logo_text: z.array(z.string()).describe("Text that is part of the logo itself (its name, its small lines)."),
   logo: z.enum(["same", "redrawn", "missing"]).describe("Is the logo the brand's real mark, a redrawn or altered one, or absent?"),
-  logo_count: z.number().int().min(0).describe("How many times the logo appears, counting a logo on a sign inside the photo."),
+  logo_count: z.number().int().min(0).describe("How many times the logo appears, counting a logo on a sign inside the photo. When the brief names a logo spot, count only free-standing marks (a logo placed on the poster as a graphic), never one printed on a product, package, shirt or object in the scene."),
   logo_notes: z.string(),
   photo: z.enum(["same", "changed", "missing", "none_given"]).describe("Is the owner's photo on the poster as given (cropped or tinted is fine), or are its people, signs or place repainted or invented?"),
   photo_notes: z.string(),
@@ -24,12 +24,16 @@ export type PosterRead = z.infer<typeof PosterReadSchema>;
  * speed run 2: painted logos came back misspelled, "HINNEAPOLIS", or twice). The painter keeps a
  * larger clear area around it (`clear`), so the logo sits on calm paper.
  */
-export const LOGO_SPOT = { x: 0.06, y: 0.05, w: 0.3, h: 0.14, clear: { w: 0.42, h: 0.22 } } as const;
+export const LOGO_SPOT = { x: 0.06, y: 0.05, w: 0.28, h: 0.12, clear: { w: 0.48, h: 0.25 } } as const;
+/** The least room kept between the logo and the edge of the clear area (so the headline below never touches it), as a fraction of the canvas. */
+const LOGO_GAP = 0.03;
 
 /** Where the logo lands on a canvas: fitted inside the spot, aspect kept, top-left aligned. Pixels of the finished (trimmed) canvas. */
 export function logoRect(canvasW: number, canvasH: number, logoW: number, logoH: number, ownerScale = 1) {
-  // The owner's logo size (the size slider, 50–200%) scales the spot, capped so it stays inside the clear area.
-  const s = Math.min(Math.max(ownerScale, 0.5), Math.min(LOGO_SPOT.clear.w / LOGO_SPOT.w, LOGO_SPOT.clear.h / LOGO_SPOT.h) + 0.35);
+  // The owner's logo size (the size slider, 50–200%) scales the spot, capped so it ends a gap short of
+  // the clear area's edges (Nov 27 ODDIO poster: a 125% logo ran past the clear area onto the headline).
+  const most = Math.min((LOGO_SPOT.clear.w - LOGO_SPOT.x - LOGO_GAP) / LOGO_SPOT.w, (LOGO_SPOT.clear.h - LOGO_SPOT.y - LOGO_GAP) / LOGO_SPOT.h);
+  const s = Math.min(Math.max(ownerScale, 0.5), most);
   const boxW = canvasW * LOGO_SPOT.w * s;
   const boxH = canvasH * LOGO_SPOT.h * s;
   const scale = Math.min(boxW / Math.max(1, logoW), boxH / Math.max(1, logoH));
@@ -75,7 +79,9 @@ const FILLER = new Set(["&", "and", "a", "an", "the", "of", "at", "in", "on", "f
  */
 export function judgePoster(read: PosterRead, copy: string[], opts: { photoGiven: boolean; logoGiven?: boolean; logoByCode?: boolean }): PosterVerdict {
   const logoByCode = opts.logoByCode ?? false;
-  // With the logo set by code, the painting itself must have none: the painted marks are what failed.
+  // With the logo set by code, the painting must have no free-standing logo (those came back misspelled
+  // or twice). The brand's mark printed on its own product or box in the scene is fine (Scott, Nov 27:
+  // the ODDIO box read naturally), so the reader leaves those out of logo_count.
   const logoGiven = (opts.logoGiven ?? true) && !logoByCode;
   const want = new Set(copy.flatMap(words));
   // The logo's own words and the words already in the owner's photo (its signs) aren't painted copy.
@@ -101,7 +107,7 @@ export function judgePoster(read: PosterRead, copy: string[], opts: { photoGiven
     ...(logoGiven && read.logo === "redrawn" ? [`the logo is redrawn instead of the brand's own mark (${read.logo_notes})`] : []),
     ...(logoGiven && read.logo === "missing" ? ["the logo is missing"] : []),
     ...(logoGiven && read.logo !== "missing" && read.logo_count > 1 ? [`the logo appears ${read.logo_count} times; it should appear once`] : []),
-    ...(logoByCode && (read.logo !== "missing" || read.logo_count > 0) ? ["a logo is painted on the poster; leave it out, the real one is set in the logo spot afterwards"] : []),
+    ...(logoByCode && read.logo_count > 0 ? ["a logo is painted on the poster as a graphic; leave it out (the mark on a product is fine), the real one is set in the logo spot afterwards"] : []),
     ...(logoByCode && !read.logo_spot_clear ? ["the logo spot isn't plain paper; keep it empty for the real logo"] : []),
     ...(opts.photoGiven && read.photo === "changed" ? [`the owner's photo is repainted or changed (${read.photo_notes}); keep it as given`] : []),
     ...(opts.photoGiven && read.photo === "missing" ? ["the owner's photo is missing"] : []),
