@@ -13,7 +13,7 @@ import { call, callPatiently, pool, sendForm, type ApiError } from "../lib/api.t
 import { prepareImage } from "../lib/images.ts";
 import { ReferencesStep } from "./references-step.tsx";
 import { ColorsStep, FontsStep, PhotosStep, StepRail, addFiles, sameFile, type SetupStage } from "./setup-steps.tsx";
-import { guessPurpose, type DocPurpose, type PaletteRole } from "../../core/picks.ts";
+import { guessPurpose, notesPicks, type DocPurpose, type PaletteRole } from "../../core/picks.ts";
 import { Turnstile } from "../lib/turnstile.tsx";
 import Intake from "./intake.tsx";
 import { BrandBoard } from "./brand-board.tsx";
@@ -78,6 +78,8 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
   const [note, setNote] = useState("");
   const [dragging, setDragging] = useState(false);
   const [working, setWorking] = useState(false);
+  // The text of the owner's text files, read in the browser at step 1, for the colors and fonts they name.
+  const [docText, setDocText] = useState("");
 
   // What the server knows.
   const [uploads, setUploads] = useState<Upload[]>([]);
@@ -127,8 +129,10 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
     call<Kit>("/api/kit", { sessionId: saved })
       .then((kit) => {
         // Sessions from before the steps, or ones already drafting, go straight to the kit.
-        const begun = kit.extraction.locked || Object.keys(kit.extraction.reads).some((id) => kit.uploads.find((u) => u.id === id && u.kind !== "image" && u.kind !== "logo" && u.kind !== "url"));
-        const next: SetupStage = begun || (!savedStage && kit.uploads.length) ? "built" : ((savedStage as SetupStage | null) ?? "photos");
+        // (Notes are read during the steps now, so a read alone doesn't mean drafting began.)
+        const begun = kit.extraction.locked || Object.keys(kit.extraction.targets).length > 0;
+        const stageSaved = savedStage === "words" ? "references" : (savedStage as SetupStage | null);
+        const next: SetupStage = begun || (!stageSaved && kit.uploads.length) ? "built" : (stageSaved ?? "photos");
         setStageState(next === "photos" && kit.uploads.length ? "colors" : next);
         return loadKit(saved!);
       })
@@ -249,12 +253,14 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
   }
   const savePicks = (sid: string, picks: Record<string, unknown>) => call("/api/session/picks", { sessionId: sid, picks });
 
-  /** Step 1 done: logo and photos go up (colors are sampled in the browser) and start being read. */
+  /** Step 1 done: everything goes up and starts being read; photos' colors are sampled and notes read for colors and fonts in the browser. */
   async function submitPhotos() {
     if (!sessionId) return;
     const sid = sessionId;
     setError(null);
     const ids = new Map<File, string>();
+    const kept = docs.filter((f) => (purposes[fileKey(f)] ?? guessPurpose(f.name)) !== "skip");
+    setDocText((await Promise.all(kept.map((f) => f.text().catch(() => "")))).join("\n"));
     // A logo dropped in with the photos ("tss-logo.png") is still the logo, when the logo slot is empty.
     const logoFile = logo ?? photos.find((p) => /logo/i.test(p.name)) ?? null;
     // The website is the slowest read, so it goes up first and is read while the owner works on.
@@ -266,6 +272,15 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
       const up = await sendUpload(sid, { kind, file, colors: JSON.stringify(colors) }, file);
       ids.set(f, up.id);
     }));
+    // Then the words: quick to send, read in the background like the rest.
+    const words: Record<string, string | Blob>[] = [
+      ...(note.trim() ? [{ kind: "note", text: note }] : []),
+      ...(pasted.trim() ? [{ kind: "pasted", text: pasted }] : []),
+      ...kept.map((f) => ({ kind: "doc", file: f, purpose: purposes[fileKey(f)] ?? guessPurpose(f.name) })),
+      ...(pdf ? [{ kind: "pdf", file: pdf }] : []),
+    ];
+    if (words.length) setBusy("Sending your notes…");
+    problems.push(...(await each(words, (fields) => sendUpload(sid, fields))));
     const heroIds = heroes.map((i) => ids.get(photos[i]!)).filter((x): x is string => !!x);
     if (heroIds.length) problems.push(...(await each([heroIds], (h) => savePicks(sid, { heroes: h }))));
     setBusy(null);
@@ -308,29 +323,16 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
     setStage(sessionId, "references");
   }
 
-  /** The last step: the words go up, then everything is read and the kit is drafted. */
+  /** The last step: everything went up at step 1, so wait for the reads and draft the kit. */
   async function buildKit() {
     if (!sessionId) return;
     setError(null);
     const sid = sessionId;
-    const added: Upload[] = [];
     setWorking(true);
-    setBusy("Uploading…");
-    const keep = (u: Upload) => (added.push(u), u);
     try {
-      const words: Record<string, string | Blob>[] = [
-        ...(note.trim() ? [{ kind: "note", text: note }] : []),
-        ...(pasted.trim() ? [{ kind: "pasted", text: pasted }] : []),
-        ...(url.trim() && !uploads.some((u) => u.kind === "url") ? [{ kind: "url", url: url.trim() }] : []),
-        ...docs.filter((f) => (purposes[fileKey(f)] ?? guessPurpose(f.name)) !== "skip").map((f) => ({ kind: "doc", file: f, purpose: purposes[fileKey(f)] ?? guessPurpose(f.name) })),
-        ...(pdf ? [{ kind: "pdf", file: pdf }] : []),
-      ];
-      const problems = await each(words, async (fields) => keep(await sendUpload(sid, fields)));
-      setBusy(null);
-      const all = [...uploads, ...added];
-      if (problems.length) setError(`${problems.join(" ")}${all.length ? " Building from the rest." : ""}`);
       setStage(sid, "built");
       await Promise.all(queue.current.jobs);
+      const all = await call<Kit>("/api/kit", { sessionId: sid }).then((k) => k.uploads).catch(() => uploads);
       if (all.some((u) => u.kind !== "font")) await readAndDraftSteps(sid, all, queue.current.tried);
       else setError("There's nothing to read yet. Add a photo, a file or a few words about the business.");
     } finally {
@@ -381,8 +383,7 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
   // ---------- view ----------
 
   const started = stage === "built";
-  const nothingChosen = !uploads.some((u) => u.kind !== "font") && !pdf && !docs.length && !url.trim() && !pasted.trim() && !note.trim();
-  const photoReads = uploads.filter((u) => u.kind === "image" || u.kind === "logo" || u.kind === "url");
+  const photoReads = uploads.filter((u) => u.kind !== "font");
   const colorSources = useMemo(() => uploads.filter((u) => (u.kind === "logo" || u.kind === "image") && u.colors?.length).map((u) => ({ kind: u.kind as "logo" | "image", colors: u.colors! })), [uploads]);
   const uploadedFonts = useMemo(() => uploads.filter((u) => u.kind === "font" && u.family).map((u) => ({ family: u.family!, file: fontFiles[u.family!] })), [uploads, fontFiles]);
   const roleHex = (r: PaletteRole) => palette?.find((p) => p.role === r)?.hex;
@@ -406,15 +407,21 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
   }, [chunks]);
   const name = businessNameOf(intakeChunks);
 
-  /** The words step takes text files and one PDF; anything else is named so nothing vanishes. */
-  function onDrop(files: File[]) {
+  /** Text files and one PDF join the first step; anything else is named so nothing vanishes. */
+  function onDrop(files: File[]): string | null {
     const pdfs = files.filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
     const docsIn = files.filter((f) => DOC_FILE.test(f.name));
     if (docsIn.length) setDocs((p) => addFiles(p, docsIn, LIMITS.docCount));
     if (pdfs[0]) setPdf(pdfs[0]);
     const left = files.length - Math.min(1, pdfs.length) - docsIn.length;
-    setError(left > 0 ? `This step takes text files (.txt, .md, .json, .css) and one PDF. ${left} ${left === 1 ? "file was" : "files were"} left out.` : null);
+    return left > 0 ? `Specs takes photos, a logo, text files (.txt, .md, .json, .css) and one PDF here; fonts come in the Fonts step. ${left} ${left === 1 ? "file was" : "files were"} left out.` : null;
   }
+  // Colors and fonts the owner's words name: their text files and typed words now, and what the
+  // PDF and website reads found, once those land (they run in the background).
+  const notes = useMemo(() => {
+    const found = Object.values(evidence).flatMap((e) => e.facts.filter((f) => f.topic === "visual").map((f) => `${f.statement} ${f.quote}`));
+    return notesPicks([docText, note, pasted, ...found].join("\n"));
+  }, [docText, note, pasted, evidence]);
 
   return (
     <>
@@ -442,27 +449,24 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
         <StepRail stage={stage} reading={stage !== "photos" ? { done: photoReads.filter((u) => reads[u.id]?.status === "done").length, total: photoReads.length } : undefined} />
       )}
       {sessionId && stage === "photos" && (
-        <PhotosStep logo={logo} photos={photos} heroes={heroes} url={url} onUrl={setUrl} busy={!!busy} onLogo={setLogo} onPhotos={setPhotos} onHeroes={setHeroes} onError={setError} onNext={submitPhotos} />
-      )}
-      {sessionId && stage === "colors" && <ColorsStep sources={colorSources} busy={!!busy} onDone={submitColors} />}
-      {sessionId && stage === "fonts" && (
-        <FontsStep
-          colors={{ bg: roleHex("background") ?? "#F5F3EF", text: roleHex("text") ?? "#141414", head: roleHex("headings") ?? roleHex("text") ?? "#141414", accent: roleHex("accent") ?? null }}
-          name=""
-          uploaded={uploadedFonts}
+        <PhotosStep
+          logo={logo}
+          photos={photos}
+          heroes={heroes}
+          url={url}
+          onUrl={setUrl}
           busy={!!busy}
-          onUpload={uploadFonts}
-          onDone={submitFonts}
-        />
-      )}
-      {sessionId && stage === "references" && <ReferencesStep sessionId={sessionId} onBack={() => setStage(sessionId, "fonts")} onDone={() => setStage(sessionId, "words")} />}
-      {sessionId && stage === "words" && (
-        <div className="card setup-step">
-          <h2 className="step-title">
-            Your words. <span>Messy is fine: that&rsquo;s the point.</span>
-          </h2>
-          <p className="muted">Facts and voice come from here: what you sell, prices, hours, how you talk. Specs reads these while you wait, then asks only what it can&rsquo;t settle.</p>
-
+          blocked={tooLong}
+          hasWords={!!(docs.length || pdf || pasted.trim() || note.trim())}
+          onLogo={setLogo}
+          onPhotos={setPhotos}
+          onHeroes={setHeroes}
+          onError={setError}
+          onOther={onDrop}
+          onNext={submitPhotos}
+        >
+          <h3 className="step-sub">Your words</h3>
+          <p className="muted small">Facts and voice come from here: what you sell, prices, hours, how you talk, and any colors or fonts you already use.</p>
           <div
             className={`dropzone ${dragging ? "over" : ""}`}
             onDragOver={(e) => {
@@ -473,12 +477,12 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
             onDrop={(e) => {
               e.preventDefault();
               setDragging(false);
-              onDrop([...e.dataTransfer.files]);
+              setError(onDrop([...e.dataTransfer.files]));
             }}
           >
-            <p className="dropzone-title">Drop text files or a PDF here</p>
+            <p className="dropzone-title">Notes, a brand file or a PDF</p>
             <p className="muted small">
-              Up to {LIMITS.docCount} text files (notes, a brand file) and one PDF of up to {LIMITS.pdfPages} pages.
+              Up to {LIMITS.docCount} text files and one PDF of up to {LIMITS.pdfPages} pages. Hex codes and font names in them fill in the next two steps.
             </p>
             <div className="dropzone-pick">
               <label htmlFor="docs" className="c-btn ghost">
@@ -523,16 +527,6 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
           )}
           {docs.some((f) => (purposes[fileKey(f)] ?? guessPurpose(f.name)) === "skip") && <p className="muted small">Files marked Leave out aren&rsquo;t uploaded. Prompts written for an image tool start there, since they aren&rsquo;t about your business.</p>}
 
-          {uploads.some((u) => u.kind === "url") ? (
-            <p className="muted small">Your website ({uploads.find((u) => u.kind === "url")!.label}) is already being read.</p>
-          ) : (
-            <>
-              <label htmlFor="url">Website</label>
-              <input id="url" type="url" placeholder="https://" value={url} onChange={(e) => setUrl(e.target.value)} />
-              <p className="counter">We read the homepage and up to two more pages.</p>
-            </>
-          )}
-
           <label htmlFor="pasted">Or paste text from your site</label>
           <textarea id="pasted" value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="Your About page, a menu, a product description…" />
           <p className="counter">
@@ -545,16 +539,21 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
             {charCount(note)} / {LIMITS.messageChars}
           </p>
 
-          <div className="step-actions">
-            <button onClick={buildKit} aria-busy={!!busy} disabled={nothingChosen || tooLong || !!busy}>
-              Build my kit
-            </button>
-            <button className="c-btn ghost" onClick={() => setStage(sessionId, "references")} disabled={!!busy}>
-              Back to references
-            </button>
-          </div>
-        </div>
+        </PhotosStep>
       )}
+      {sessionId && stage === "colors" && <ColorsStep sources={colorSources} fromNotes={notes.hexes} busy={!!busy} onDone={submitColors} />}
+      {sessionId && stage === "fonts" && (
+        <FontsStep
+          colors={{ bg: roleHex("background") ?? "#F5F3EF", text: roleHex("text") ?? "#141414", head: roleHex("headings") ?? roleHex("text") ?? "#141414", accent: roleHex("accent") ?? null }}
+          name=""
+          uploaded={uploadedFonts}
+          fromNotes={{ heading: notes.heading, body: notes.body, unknown: notes.unknownFonts }}
+          busy={!!busy}
+          onUpload={uploadFonts}
+          onDone={submitFonts}
+        />
+      )}
+      {sessionId && stage === "references" && <ReferencesStep sessionId={sessionId} onBack={() => setStage(sessionId, "fonts")} onDone={buildKit} />}
 
       {busy && <Working kind="reading" lead={busy} />}
       {error && <p className="error">{error}</p>}

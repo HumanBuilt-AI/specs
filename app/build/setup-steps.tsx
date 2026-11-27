@@ -1,22 +1,22 @@
 "use client";
 
-// The upload screen, one step at a time (Scott, Nov 26): photos first (star the ones that lead),
-// then a palette built from them by role, then fonts with a live preview, then the words. The
-// visual steps are instant, and the photos are read in the background while the owner works
-// through colors and fonts, so most of the reading wait is hidden.
-import { useEffect, useMemo, useState } from "react";
+// The upload screen, one step at a time (Scott, Nov 26): everything goes in first (logo, photos,
+// notes, a PDF, the website, a few words; Scott, Nov 27: notes came last, so a .txt of palettes and
+// fonts never reached Colors and Fonts), then a palette by role, then fonts with a live preview,
+// then references. The visual steps are instant, and the uploads are read in the background while
+// the owner works through them, so most of the reading wait is hidden.
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { PALETTE_ROLES, ROLE_TEXT, contrastOf, paletteCandidates, suggestPalette, typedHexes, type Candidate, type ColorSource, type PaletteRole } from "../../core/picks.ts";
 import { googleFamilies, googleFont, googleFontsHref } from "../../core/fonts.ts";
 import { LIMITS } from "../../core/limits.ts";
 import { LOGO_ACCEPT, isSvg, logoProblem } from "../lib/images.ts";
 
-export type SetupStage = "photos" | "colors" | "fonts" | "references" | "words" | "built";
+export type SetupStage = "photos" | "colors" | "fonts" | "references" | "built";
 export const SETUP_STEPS: { id: Exclude<SetupStage, "built">; name: string }[] = [
-  { id: "photos", name: "Photos" },
+  { id: "photos", name: "Your files" },
   { id: "colors", name: "Colors" },
   { id: "fonts", name: "Fonts" },
   { id: "references", name: "References" },
-  { id: "words", name: "Words" },
 ];
 
 /** Same name and size: the same file dropped twice. */
@@ -56,6 +56,12 @@ export function PhotosStep(props: {
   onPhotos: (f: File[]) => void;
   onHeroes: (h: number[]) => void;
   onError: (m: string | null) => void;
+  /** Files that aren't photos or a logo (text files, a PDF): the words part of this step takes them. */
+  onOther: (files: File[]) => string | null;
+  /** Anything to read besides photos (notes, a PDF, pasted words), for the button's label. */
+  hasWords: boolean;
+  blocked?: boolean;
+  children?: ReactNode;
   onNext: () => void;
 }) {
   const { logo, photos, heroes, busy } = props;
@@ -71,8 +77,9 @@ export function PhotosStep(props: {
     const design = files.map(logoProblem).find(Boolean);
     if (logoLike) props.onLogo(logoLike);
     if (images.length) props.onPhotos(addFiles(photos, images, LIMITS.imageCount));
-    const left = files.length - (logoLike ? 1 : 0) - images.length;
-    props.onError(design ?? (left > 0 ? "This step takes photos and a logo. Fonts and text files come in the next steps." : null));
+    const other = files.filter((f) => f !== logoLike && !images.includes(f) && !logoProblem(f));
+    const otherProblem = other.length ? props.onOther(other) : null;
+    props.onError(design ?? otherProblem);
   }
   function pickLogo(f: File | null) {
     const problem = f && logoProblem(f);
@@ -88,7 +95,7 @@ export function PhotosStep(props: {
   return (
     <div className="card setup-step">
       <h2 className="step-title">
-        Your logo and photos. <span>Three to five photos is plenty.</span>
+        Everything you have. <span>Messy is fine: that&rsquo;s the point.</span>
       </h2>
       <div
         className={`dropzone ${dragging ? "over" : ""}`}
@@ -100,8 +107,8 @@ export function PhotosStep(props: {
           take([...e.dataTransfer.files]);
         }}
       >
-        <p className="dropzone-title">Drop your logo and photos here</p>
-        <p className="muted small">SVG or PNG is best for the logo. Photos are shrunk in your browser before upload, up to {LIMITS.imageCount}.</p>
+        <p className="dropzone-title">Drop your logo, photos and notes here</p>
+        <p className="muted small">SVG or PNG is best for the logo. Up to {LIMITS.imageCount} photos (three to five is plenty), text files with your colors and fonts, and one PDF.</p>
         <div className="dropzone-pick">
           <label htmlFor="logo" className="c-btn ghost">
             Choose a logo
@@ -154,9 +161,11 @@ export function PhotosStep(props: {
       <input id="url" type="url" placeholder="https://" value={props.url} onChange={(e) => props.onUrl(e.target.value)} />
       <p className="counter">A site takes the longest to read, so Specs starts on it now, while you pick colors and fonts.</p>
 
+      {props.children}
+
       <div className="step-actions">
-        <button onClick={props.onNext} disabled={busy}>
-          {logo || photos.length || props.url.trim() ? "Next: colors" : "Skip: I have no photos"}
+        <button onClick={props.onNext} disabled={busy || props.blocked}>
+          {logo || photos.length || props.url.trim() || props.hasWords ? "Next: colors" : "Skip: I have nothing yet"}
         </button>
       </div>
     </div>
@@ -168,8 +177,9 @@ export function PhotosStep(props: {
 type Slot = { role: PaletteRole; hex: string | null };
 const ink = (hex: string) => (contrastOf(hex, "#141414") >= contrastOf(hex, "#FFFFFF") ? "#141414" : "#FFFFFF");
 
-export function ColorsStep(props: { sources: ColorSource[]; busy: boolean; onDone: (palette: { role: PaletteRole; hex: string }[] | null) => void }) {
-  const [pasted, setPasted] = useState("");
+export function ColorsStep(props: { sources: ColorSource[]; fromNotes?: string[]; busy: boolean; onDone: (palette: { role: PaletteRole; hex: string }[] | null) => void }) {
+  // Hex codes in the owner's notes start in the box, so they lead the palette.
+  const [pasted, setPasted] = useState((props.fromNotes ?? []).join(", "));
   const typed = typedHexes(pasted);
   const cands = useMemo(() => paletteCandidates(props.sources, typed), [props.sources, typed.join()]);
   const fresh = (): Slot[] => {
@@ -250,7 +260,7 @@ export function ColorsStep(props: { sources: ColorSource[]; busy: boolean; onDon
 
       <label htmlFor="hexes">Have exact colors? Paste hex codes</label>
       <input id="hexes" value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="#361E39, #BE3042, #F4EBDD" />
-      <p className="counter">Hex codes you paste come first.</p>
+      <p className="counter">{props.fromNotes?.length ? "From your notes. Hex codes here come first." : "Hex codes you paste come first."}</p>
 
       <div className="palette-preview" style={{ background: bg, color: text }} aria-label="Preview">
         <div style={{ color: head }} className="pp-head">
@@ -292,11 +302,20 @@ export function FontsStep(props: {
   uploaded: { family: string; file?: File }[];
   busy: boolean;
   onUpload: (files: File[]) => void;
+  /** Fonts the owner's notes name: Google fonts to start from, and names Google doesn't serve. */
+  fromNotes?: { heading: string | null; body: string | null; unknown: string[] };
   onDone: (fonts: { heading: string; body: string } | null) => void;
 }) {
   const { colors, uploaded } = props;
   const families = useMemo(googleFamilies, []);
-  const start = uploaded.length >= 2 ? { heading: uploaded[0]!.family, body: uploaded[1]!.family } : uploaded.length === 1 ? { heading: uploaded[0]!.family, body: "Inter" } : PAIRS[0]!;
+  const noted = props.fromNotes;
+  const start = uploaded.length >= 2
+    ? { heading: uploaded[0]!.family, body: uploaded[1]!.family }
+    : uploaded.length === 1
+      ? { heading: uploaded[0]!.family, body: noted?.body ?? "Inter" }
+      : noted?.heading || noted?.body
+        ? { heading: noted.heading ?? noted.body!, body: noted.body ?? "Inter" }
+        : PAIRS[0]!;
   const [heading, setHeading] = useState(start.heading);
   const [body, setBody] = useState(start.body);
   const [touched, setTouched] = useState(false);
@@ -331,6 +350,12 @@ export function FontsStep(props: {
       <h2 className="step-title">
         Your fonts. <span>Upload yours, or name any Google font.</span>
       </h2>
+      {(noted?.heading || noted?.body) && !uploaded.length && <p className="muted">Your notes name {[noted.heading, noted.body].filter(Boolean).join(" and ")}, so they&rsquo;re picked to start.</p>}
+      {!!noted?.unknown.filter((n) => !uploaded.some((u) => u.family.toLowerCase() === n.toLowerCase())).length && (
+        <p className="small needs-call">
+          Your notes name {noted.unknown.join(" and ")}, which {noted.unknown.length === 1 ? "isn't a free Google font" : "aren't free Google fonts"}. Upload the font {noted.unknown.length === 1 ? "file" : "files"} to use {noted.unknown.length === 1 ? "it" : "them"} exactly, or pick a close match below.
+        </p>
+      )}
 
       <div className="dropzone-pick" style={{ justifyContent: "flex-start" }}>
         <label htmlFor="fonts" className="c-btn ghost">
@@ -345,7 +370,7 @@ export function FontsStep(props: {
       </div>
 
       <div className="pair-grid">
-        {[...(uploaded.length ? [{ heading: start.heading, body: start.body, note: "Your files" }] : []), ...PAIRS].map((p) => (
+        {[...(uploaded.length ? [{ heading: start.heading, body: start.body, note: "Your files" }] : noted?.heading || noted?.body ? [{ heading: start.heading, body: start.body, note: "From your notes" }] : []), ...PAIRS].filter((p, i, xs) => xs.findIndex((x) => x.heading === p.heading && x.body === p.body) === i).map((p) => (
           <button key={`${p.heading}/${p.body}`} type="button" className={`pair ${heading === p.heading && body === p.body ? "on" : ""}`} onClick={() => set(p.heading, p.body)} aria-pressed={heading === p.heading && body === p.body}>
             <span style={{ fontFamily: `"${p.heading}", serif`, fontSize: 24, lineHeight: 1.1 }}>{props.name || "Good things"}</span>
             <span style={{ fontFamily: `"${p.body}", sans-serif` }} className="small">

@@ -191,10 +191,10 @@ export function ReferencesStep(props: { sessionId: string; onBack: () => void; o
 
       <div className="step-actions">
         <button onClick={() => next(false)} disabled={!!busy}>
-          Next: words
+          Build my kit
         </button>
         <button className="c-btn ghost" onClick={() => next(true)} disabled={!!busy}>
-          Skip references
+          Skip: build my kit
         </button>
         <button className="c-btn ghost" onClick={props.onBack} disabled={!!busy}>
           Back to fonts

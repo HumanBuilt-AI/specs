@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { Swatch } from "./colors.ts";
 import type { ExtractChunkId } from "./extract.ts";
 import type { IntakeItem } from "./intake.ts";
+import { fontsNamedIn, googleFont } from "./fonts.ts";
 
 export const PALETTE_ROLES = ["background", "text", "headings", "accent", "extra"] as const;
 export type PaletteRole = (typeof PALETTE_ROLES)[number];
@@ -157,6 +158,45 @@ export function suggestPalette(cands: Candidate[]): { role: PaletteRole; hex: st
 
 /** Hex values in pasted text ("#361e39, #BE3042"), in order, once each. */
 export const typedHexes = (s: string) => [...new Set((s.match(/#[0-9a-f]{6}\b/gi) ?? []).map((h) => h.toUpperCase()))];
+
+// ---------- notes read in the browser ----------
+
+export type NotesPicks = { hexes: string[]; heading: string | null; body: string | null; unknownFonts: string[] };
+
+const HEADING_WORDS = /\b(head(ing|line)s?|titles?|display|logo|wordmark)\b/i;
+const BODY_WORDS = /\b(body|text|paragraphs?|copy|captions?)\b/i;
+// "Fonts: Gotham / Inter", "Heading font - Brandon Grotesque": the names after a font label.
+const FONT_LABEL = /\b(?:fonts?|typefaces?|type|headings?|headlines?|body|display)\b[^:\n]{0,24}?[:=–—-]\s*([^\n]+)/gi;
+
+/**
+ * Colors and fonts an owner's notes name (Scott, Nov 27: a .txt of palettes and font picks came in
+ * after the Colors and Fonts steps, so none of it reached them). Read in code, no model call: hex
+ * codes in order, Google fonts by role where a line says which, and font names that aren't Google
+ * fonts, so the Fonts step can ask for their files.
+ */
+export function notesPicks(text: string): NotesPicks {
+  let heading: string | null = null;
+  let body: string | null = null;
+  for (const line of text.split(/\n/)) {
+    const named = fontsNamedIn(line);
+    if (!named.length) continue;
+    if (!heading && HEADING_WORDS.test(line)) heading = named[0]!.family;
+    if (!body && BODY_WORDS.test(line)) body = named.find((f) => f.family !== heading)?.family ?? null;
+  }
+  const all = fontsNamedIn(text).map((f) => f.family);
+  heading ??= all.find((f) => f !== body) ?? null;
+  body ??= all.find((f) => f !== heading) ?? null;
+  const unknown = new Set<string>();
+  for (const m of text.matchAll(FONT_LABEL)) {
+    for (const raw of m[1]!.split(/[,;/&+|]|\band\b|\bwith\b/i)) {
+      const name = raw.replace(/\(.*?\)/g, "").replace(/\b(for|as|on|in)\b.*$/i, "").replace(/["'“”‘’*_`]/g, "").trim();
+      if (!/^[A-Z][\w .'&-]{1,38}$/.test(name) || /#[0-9a-f]/i.test(name)) continue;
+      if (googleFont(name) || fontsNamedIn(name).length) continue;
+      unknown.add(name.replace(/\s+(regular|bold|medium|light|black|italic|semibold)$/i, ""));
+    }
+  }
+  return { hexes: typedHexes(text), heading, body, unknownFonts: [...unknown].slice(0, 3) };
+}
 
 // ---------- the words step ----------
 

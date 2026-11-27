@@ -119,6 +119,10 @@ test("with the logo set by code, a painted logo or a cluttered logo spot fails, 
   assert.equal(painted.pass, false);
   assert.match(painted.problems.join(), /a logo is painted/);
   assert.doesNotMatch(painted.problems.join(), /appears 2 times/);
+  // The brand's mark on its own product box in the scene is fine (Scott, Nov 27, ODDIO): the reader
+  // lists its words as logo text and doesn't count it, so nothing fails.
+  const onBox = judgePoster({ ...empty, logo: "same", logo_count: 0, logo_text: ["ODDIO"], text: [...clean.text, "ODDIO"] }, COPY, { photoGiven: true, logoByCode: true });
+  assert.equal(onBox.pass, true, onBox.problems.join("; "));
   const cluttered = judgePoster({ ...empty, logo_spot_clear: false }, COPY, { photoGiven: true, logoByCode: true });
   assert.match(cluttered.problems.join(), /logo spot isn't plain paper/);
 });
@@ -135,9 +139,13 @@ test("the logo fits inside its spot, keeping its shape", () => {
 test("the owner's logo size scales the logo, capped inside the clear area", () => {
   const base = logoRect(1024, 1536, 800, 400);
   const big = logoRect(1024, 1536, 800, 400, 1.5);
-  assert.ok(big.w > base.w * 1.4, `${big.w} vs ${base.w}`);
-  const huge = logoRect(1024, 1536, 800, 400, 3);
-  assert.ok(huge.w <= 1024 * (LOGO_SPOT.clear.w + 0.12), `capped: ${huge.w}`);
+  assert.ok(big.w > base.w * 1.3, `${big.w} vs ${base.w}`);
+  // Nov 27 ODDIO poster: a big logo ran past the clear area onto the headline. It now stops a gap short of its edges.
+  for (const [lw, lh] of [[800, 400], [300, 600], [900, 100]] as const) {
+    const huge = logoRect(1024, 1536, lw, lh, 3);
+    assert.ok(huge.x + huge.w <= 1024 * (LOGO_SPOT.clear.w - 0.02), `right edge: ${huge.x + huge.w}`);
+    assert.ok(huge.y + huge.h <= 1536 * (LOGO_SPOT.clear.h - 0.02), `bottom edge: ${huge.y + huge.h}`);
+  }
 });
 
 test("a plum logo is left as is on a cream patch and knocked out on plum (Nov 27 live poster)", () => {
