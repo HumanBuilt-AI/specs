@@ -155,6 +155,11 @@ export function PosterCard(props: {
       <div className="bold-offer">
         <p className="error small">{error ?? "The poster stopped partway. Your post is unchanged."}</p>
         {!error && job.error && <p className="muted small">What went wrong: {job.error}</p>}
+        {!error && (
+          <button type="button" className="c-btn" onClick={() => void start()}>
+            Try again
+          </button>
+        )}
       </div>
     );
 

@@ -16,6 +16,7 @@ import type { Image } from "../core/claude.ts";
 import { CONTENT } from "./generated/content.ts";
 import { guardedCall, type Deps } from "./handlers.ts";
 import { reserve, settle } from "./spend.ts";
+import { updateSession } from "./sessions.ts";
 import { inputs, pick, copyOf } from "./bold-run.ts";
 import { loadPosterJob, posterImageKey, posterPlateKey, updatePosterJob, type PosterJob, type PosterTrigger } from "./poster.ts";
 
@@ -40,6 +41,8 @@ export async function runPoster(deps: Deps, t: PosterTrigger, openaiKey: string 
     const message = err instanceof Error ? err.message : String(err);
     console.error("Poster failed:", message);
     await updatePosterJob(deps.kv, t.sessionId, t.postId, (j) => ({ ...j, status: "failed", stage: "Stopped", error: message.slice(0, 300) })).catch(() => {});
+    // Our failure, not the owner's: the visit gets its poster back to try again.
+    await updateSession(deps.kv, t.sessionId, (s) => ({ ...s, postersUsed: Math.max(0, (s.postersUsed ?? 1) - 1) })).catch(() => {});
   }
 }
 

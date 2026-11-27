@@ -7,6 +7,7 @@ import { z } from "zod";
 
 export const PosterReadSchema = z.object({
   text: z.array(z.string()).describe("Every piece of text on the poster outside the logo, exactly as painted, one entry per line or block."),
+  photo_text: z.array(z.string()).describe("Text that was already in the owner's photo (its signs) and still is, inside the photo on the poster."),
   logo_text: z.array(z.string()).describe("Text that is part of the logo itself (its name, its small lines)."),
   logo: z.enum(["same", "redrawn", "missing"]).describe("Is the logo the brand's real mark, a redrawn or altered one, or absent?"),
   logo_count: z.number().int().min(0).describe("How many times the logo appears, counting a logo on a sign inside the photo."),
@@ -49,7 +50,9 @@ const FILLER = new Set(["&", "and", "a", "an", "the", "of", "at", "in", "on", "f
 export function judgePoster(read: PosterRead, copy: string[], opts: { photoGiven: boolean; logoGiven?: boolean }): PosterVerdict {
   const logoGiven = opts.logoGiven ?? true;
   const want = new Set(copy.flatMap(words));
-  const logoWords = new Set(read.logo_text.flatMap(words));
+  // The logo's own words and the words already in the owner's photo (its signs) aren't painted copy.
+  // Nov 27 live run: the painter erased the shop's real sign to obey "no other words", and failed the photo check.
+  const logoWords = new Set([...read.logo_text, ...read.photo_text].flatMap(words));
   const got = read.text.flatMap(words);
   const gotSet = new Set(got);
   const invented = [...new Set(got.filter((w) => !want.has(w) && !logoWords.has(w)))];
