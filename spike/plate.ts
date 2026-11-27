@@ -39,6 +39,7 @@ import { ArtCritiqueSchema, checkBold, fillEchoes, relevantIssues, type ArtCriti
 import { paintSketch, SKETCH_WORST_USD } from "../core/sketch.ts";
 import { paintOpenAI, OPENAI_WORST_USD } from "../core/image-openai.ts";
 import { PRINT_TEXTURE_CSS, WIREFRAME_CSS, withPlate } from "../core/print.ts";
+import { PosterReadSchema, judgePoster, type PosterVerdict } from "../core/poster.ts";
 
 const BRAND = "good-company";
 const args = process.argv.slice(2);
@@ -212,31 +213,15 @@ async function compose(o: { label: string; name: string; appendix: string; image
   return b;
 }
 
-// Reading every word back from a render.
-const ReadBackSchema = z.object({
-  text: z.array(z.string()).describe("Every piece of text on the poster outside the logo, exactly as painted, one entry per line or block."),
-  logo_text: z.array(z.string()).describe("Text that is part of the logo itself."),
-  logo: z.enum(["same", "redrawn", "missing"]).describe("Is the logo the brand's real mark, a redrawn or altered one, or absent?"),
-  logo_notes: z.string(),
-  hard_to_read: z.array(z.string()).describe("Copy that is there but hard to read on a phone (low contrast, too small, lost in texture). Empty if none."),
-});
-type ReadCheck = { invented: string[]; missing: string[]; logo: string; logoNotes: string; hardToRead: string[]; raw: string[] };
-const norm = (s: string) => s.toLowerCase().replace(/[–—]/g, "-").replace(/[^a-z0-9&:/-]+/g, " ").split(/\s+/).filter((w) => w && w !== "-");
-async function readBack(pngAbs: string): Promise<ReadCheck> {
-  const p = loadPrompt("read-back", { copy: copyText });
-  const out = await callStructured({ step: "read_back", ...p, images: [jpeg(await small(pngAbs, 1200), "Image 1: the poster."), { ...logoImg, label: "Image 2: the brand's real logo." }], schema: ReadBackSchema });
+// Reading every word back from a render: the shared check in core/poster.ts.
+type ReadCheck = PosterVerdict & { logoNotes: string; raw: string[] };
+async function readBack(pngAbs: string, withPhoto = false): Promise<ReadCheck> {
+  const p = loadPrompt("read-back", { copy: copyText, photo_line: withPhoto ? "The owner's photo is the third." : "No owner photo is given." });
+  const images = [jpeg(await small(pngAbs, 1200), "Image 1: the poster."), { ...logoImg, label: "Image 2: the brand's real logo." }, ...(withPhoto ? [{ ...photoImg, label: "Image 3: the owner's photo." }] : [])];
+  const out = await callStructured({ step: "read_back", ...p, images, schema: PosterReadSchema });
   usage.push(out.usage);
-  const want = new Set(TEXT_SLOTS.flatMap((s) => (slots[s] ? norm(slots[s]!) : [])));
-  const got = out.data.text.flatMap(norm);
-  const gotSet = new Set(got);
-  return {
-    invented: [...new Set(got.filter((w) => !want.has(w)))],
-    missing: [...want].filter((w) => !gotSet.has(w)),
-    logo: out.data.logo,
-    logoNotes: out.data.logo_notes,
-    hardToRead: out.data.hard_to_read,
-    raw: out.data.text,
-  };
+  const copyList = TEXT_SLOTS.flatMap((s) => (slots[s] ? [slots[s]!] : []));
+  return { ...judgePoster(out.data, copyList, { photoGiven: withPhoto }), logoNotes: out.data.logo_notes, raw: out.data.text };
 }
 const readIssues = (r?: ReadCheck) => (r ? [...r.missing.map((w) => `"${w}" can't be read on the render`), ...r.hardToRead.map((x) => `hard to read: ${x}`)] : []);
 
@@ -392,14 +377,14 @@ try {
   builds.push(...bs);
   for (const b of bs) console.log(`  ${b.label}: ${issueText(b).length || readIssues(b.readBack).length ? `flagged: ${[...issueText(b), ...readIssues(b.readBack)].join("; ")}` : "passed the checks"}`);
   for (const x of c) {
-    if (x.png) x.readBack = await readBack(join(runDir, x.png));
+    if (x.png) x.readBack = await readBack(join(runDir, x.png), true);
     fulls.push(x);
-    console.log(`  ${x.label}: ${x.png ? `invented [${x.readBack?.invented.join(", ")}], missing [${x.readBack?.missing.join(", ")}], logo ${x.readBack?.logo}` : x.errors.join("; ")}`);
+    console.log(`  ${x.label}: ${x.png ? `invented [${x.readBack?.invented.join(", ")}], missing [${x.readBack?.missing.join(", ")}], logo ${x.readBack?.logo}, photo ${x.readBack?.photo}${x.readBack?.problems.length ? `: ${x.readBack.problems.join("; ")}` : ""}` : x.errors.join("; ")}`);
   }
   if (a?.png) a.readBack = await readBack(join(runDir, a.png));
   void u0;
 
-  const passed = (r?: ReadCheck) => !!r && !r.invented.length && !r.missing.length && r.logo === "same" && !r.hardToRead.length;
+  const passed = (r?: ReadCheck) => !!r && r.pass;
   if (fulls.length) console.log(`  C passed the read-back ${fulls.filter((f) => passed(f.readBack)).length} of ${fulls.length} times`);
 
   // Blind critique: today, the target, A, B1..n, C.
