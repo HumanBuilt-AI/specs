@@ -211,7 +211,8 @@ export function buildTokensCss(colors: SessionKit["colors"], fonts: SessionKit["
     `  --stamp-rotation: -3deg;`,
     `  --safe-margin: 80px;`,
     `  --unit: 8px;`,
-    ...(logoScale !== 1 ? [`  --logo-height: ${+(3.2 * logoScale).toFixed(2)}em;`] : []),
+    // A logo is never shown under 76px tall (of 1080), so it can't shrink to a speck in a corner.
+    ...(logoScale !== 1 ? [`  --logo-height: ${+(3.2 * logoScale).toFixed(2)}em;`, `  --logo-scale: ${logoScale};`] : []),
     `  --role-background: var(--color-background);`,
     `  --role-text: var(--color-text);`,
     `  --role-heading: var(--color-heading);`,

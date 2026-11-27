@@ -126,7 +126,7 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
     call<Kit>("/api/kit", { sessionId: saved })
       .then((kit) => {
         // Sessions from before the steps, or ones already drafting, go straight to the kit.
-        const begun = kit.extraction.locked || Object.keys(kit.extraction.reads).some((id) => kit.uploads.find((u) => u.id === id && u.kind !== "image" && u.kind !== "logo"));
+        const begun = kit.extraction.locked || Object.keys(kit.extraction.reads).some((id) => kit.uploads.find((u) => u.id === id && u.kind !== "image" && u.kind !== "logo" && u.kind !== "url"));
         const next: SetupStage = begun || (!savedStage && kit.uploads.length) ? "built" : ((savedStage as SetupStage | null) ?? "photos");
         setStageState(next === "photos" && kit.uploads.length ? "colors" : next);
         return loadKit(saved!);
@@ -256,13 +256,15 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
     const ids = new Map<File, string>();
     // A logo dropped in with the photos ("tss-logo.png") is still the logo, when the logo slot is empty.
     const logoFile = logo ?? photos.find((p) => /logo/i.test(p.name)) ?? null;
-    const problems = await each([...(logoFile ? [logoFile] : []), ...photos.filter((p) => p !== logoFile)], async (f) => {
+    // The website is the slowest read, so it goes up first and is read while the owner works on.
+    const problems = url.trim() && !uploads.some((u) => u.kind === "url") ? await each([url.trim()], (u) => sendUpload(sid, { kind: "url", url: u })) : [];
+    problems.push(...await each([...(logoFile ? [logoFile] : []), ...photos.filter((p) => p !== logoFile)], async (f) => {
       const kind = f === logoFile ? "logo" : "image";
       setBusy(kind === "logo" ? `Preparing ${f.name}…` : `Shrinking and uploading ${f.name}…`);
       const { file, colors } = await prepareImage(f, kind);
       const up = await sendUpload(sid, { kind, file, colors: JSON.stringify(colors) }, file);
       ids.set(f, up.id);
-    });
+    }));
     const heroIds = heroes.map((i) => ids.get(photos[i]!)).filter((x): x is string => !!x);
     if (heroIds.length) problems.push(...(await each([heroIds], (h) => savePicks(sid, { heroes: h }))));
     setBusy(null);
@@ -318,7 +320,7 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
       const words: Record<string, string | Blob>[] = [
         ...(note.trim() ? [{ kind: "note", text: note }] : []),
         ...(pasted.trim() ? [{ kind: "pasted", text: pasted }] : []),
-        ...(url.trim() ? [{ kind: "url", url: url.trim() }] : []),
+        ...(url.trim() && !uploads.some((u) => u.kind === "url") ? [{ kind: "url", url: url.trim() }] : []),
         ...docs.filter((f) => (purposes[fileKey(f)] ?? guessPurpose(f.name)) !== "skip").map((f) => ({ kind: "doc", file: f, purpose: purposes[fileKey(f)] ?? guessPurpose(f.name) })),
         ...(pdf ? [{ kind: "pdf", file: pdf }] : []),
       ];
@@ -379,7 +381,7 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
 
   const started = stage === "built";
   const nothingChosen = !uploads.some((u) => u.kind !== "font") && !pdf && !docs.length && !url.trim() && !pasted.trim() && !note.trim();
-  const photoReads = uploads.filter((u) => u.kind === "image" || u.kind === "logo");
+  const photoReads = uploads.filter((u) => u.kind === "image" || u.kind === "logo" || u.kind === "url");
   const colorSources = useMemo(() => uploads.filter((u) => (u.kind === "logo" || u.kind === "image") && u.colors?.length).map((u) => ({ kind: u.kind as "logo" | "image", colors: u.colors! })), [uploads]);
   const uploadedFonts = useMemo(() => uploads.filter((u) => u.kind === "font" && u.family).map((u) => ({ family: u.family!, file: fontFiles[u.family!] })), [uploads, fontFiles]);
   const roleHex = (r: PaletteRole) => palette?.find((p) => p.role === r)?.hex;
@@ -439,7 +441,7 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
         <StepRail stage={stage} reading={stage !== "photos" ? { done: photoReads.filter((u) => reads[u.id]?.status === "done").length, total: photoReads.length } : undefined} />
       )}
       {sessionId && stage === "photos" && (
-        <PhotosStep logo={logo} photos={photos} heroes={heroes} busy={!!busy} onLogo={setLogo} onPhotos={setPhotos} onHeroes={setHeroes} onError={setError} onNext={submitPhotos} />
+        <PhotosStep logo={logo} photos={photos} heroes={heroes} url={url} onUrl={setUrl} busy={!!busy} onLogo={setLogo} onPhotos={setPhotos} onHeroes={setHeroes} onError={setError} onNext={submitPhotos} />
       )}
       {sessionId && stage === "colors" && <ColorsStep sources={colorSources} busy={!!busy} onDone={submitColors} />}
       {sessionId && stage === "fonts" && (
@@ -519,9 +521,15 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
           )}
           {docs.some((f) => (purposes[fileKey(f)] ?? guessPurpose(f.name)) === "skip") && <p className="muted small">Files marked Leave out aren&rsquo;t uploaded. Prompts written for an image tool start there, since they aren&rsquo;t about your business.</p>}
 
-          <label htmlFor="url">Website</label>
-          <input id="url" type="url" placeholder="https://" value={url} onChange={(e) => setUrl(e.target.value)} />
-          <p className="counter">We read the homepage and up to two more pages.</p>
+          {uploads.some((u) => u.kind === "url") ? (
+            <p className="muted small">Your website ({uploads.find((u) => u.kind === "url")!.label}) is already being read.</p>
+          ) : (
+            <>
+              <label htmlFor="url">Website</label>
+              <input id="url" type="url" placeholder="https://" value={url} onChange={(e) => setUrl(e.target.value)} />
+              <p className="counter">We read the homepage and up to two more pages.</p>
+            </>
+          )}
 
           <label htmlFor="pasted">Or paste text from your site</label>
           <textarea id="pasted" value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="Your About page, a menu, a product description…" />

@@ -168,3 +168,46 @@ export function guessPurpose(name: string): DocPurpose {
   if (/voice|tone|copy|captions?|posts?|tagline|social/i.test(name)) return "voice";
   return "facts";
 }
+
+// ---------- the logo on the post's background ----------
+
+/** Below this contrast a logo's ink reads as part of the background (plum #361E39 on plum is 1.0). */
+const VANISHES = 1.8;
+const hex2 = (r: number, g: number, b: number) => `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+
+/**
+ * A logo that would vanish on the post's background becomes a knockout: the parts too close to
+ * the background are redrawn in the kit's text color (or near-black or white, whichever reads),
+ * keeping its shape and its other colors. A logo with its own solid background shows as a badge
+ * and is left alone, and so is one that already reads. A design rule, so code, not the model
+ * (Scott, Nov 27). Changes RGBA pixels in place; true when it changed any.
+ */
+export function knockoutPixels(px: Uint8ClampedArray | number[], background: string, text: string | null): boolean {
+  let clear = 0, ink = 0, faint = 0;
+  const cache = new Map<number, boolean>();
+  const fades = (i: number) => {
+    const key = (px[i]! << 16) | (px[i + 1]! << 8) | px[i + 2]!;
+    let v = cache.get(key);
+    if (v === undefined) cache.set(key, (v = contrastOf(hex2(px[i]!, px[i + 1]!, px[i + 2]!), background) < VANISHES));
+    return v;
+  };
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3]! < 40) {
+      clear++;
+      continue;
+    }
+    ink++;
+    if (fades(i)) faint++;
+  }
+  const total = px.length / 4;
+  if (!total || clear / total < 0.08 || !ink || faint / ink < 0.25) return false;
+  const knock = text && contrastOf(text, background) >= 3 ? text : contrastOf("#141414", background) >= contrastOf("#FFFFFF", background) ? "#141414" : "#FFFFFF";
+  const [r, g, b] = rgb(knock);
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3]! < 40 || !fades(i)) continue;
+    px[i] = r;
+    px[i + 1] = g;
+    px[i + 2] = b;
+  }
+  return true;
+}
