@@ -2,6 +2,7 @@
 // drafted from its own uploads. Plan, write and compose read only this, so the same pipeline
 // serves both.
 import "server-only";
+import { referencesChunk } from "../core/references.ts";
 import { CONTENT, DEMO_BRAND_IDS, type DemoBrandId } from "./generated/content.ts";
 import { kitFromChunks, businessNameOf, googleFontsHref } from "../core/session-kit.ts";
 import { googleFont } from "../core/fonts.ts";
@@ -70,7 +71,9 @@ export async function sessionKit(deps: { kv: KV }, session: Session): Promise<Ki
     taken.add(file);
     photos.push({ file, alt: `Uploaded photo: ${up.label ?? "photo"}`, mediaType: mediaType as Image["mediaType"], base64: Buffer.from(bytes).toString("base64"), uploadId: up.id });
   }
-  return { id: "session", files: kit.files, businessName: name, businessLine: line.slice(0, 300), photos, tokensCss: kit.tokensCss, wordmarkLines: kit.wordmarkLines, fontsHref: googleFontsHref(Object.values(kit.fonts)), fontFiles };
+  // The owner's references and sliders become the kit's references chunk (written by code).
+  const files = session.references ? { ...kit.files, "references.md": referencesChunk(session.references) } : kit.files;
+  return { id: "session", files, businessName: name, businessLine: line.slice(0, 300), photos, tokensCss: kit.tokensCss, wordmarkLines: kit.wordmarkLines, fontsHref: googleFontsHref(Object.values(kit.fonts)), fontFiles };
 }
 
 export async function kitFor(deps: { kv: KV }, session: Session, brand: DemoBrandId | "session"): Promise<KitSource> {

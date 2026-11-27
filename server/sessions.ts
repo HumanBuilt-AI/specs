@@ -4,6 +4,7 @@ import "server-only";
 import { LIMITS, type PostIntent } from "../core/limits.ts";
 import type { Plan, Written } from "../core/schemas.ts";
 import type { Picks } from "../core/picks.ts";
+import type { References } from "../core/references.ts";
 import type { DemoBrandId } from "./generated/content.ts";
 import type { Brief } from "./pipeline.ts";
 import { Refusal } from "./http.ts";
@@ -71,6 +72,8 @@ export type Session = {
   extraction?: ExtractionState;
   /** Hero photos, palette and fonts the owner set before anything was read (core/picks.ts). */
   picks?: Picks;
+  /** Reference images and the density, contrast and texture sliders (core/references.ts, server/references.ts). */
+  references?: References;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
