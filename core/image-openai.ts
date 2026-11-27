@@ -16,10 +16,18 @@ export async function paintOpenAI(opts: {
   model?: string | null;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /** Overrides for the speed spike: quality ("low" | "medium" | "high") and size ("1024x1536" for a tall poster or story). */
+  quality?: string;
+  size?: string;
+  /** Streams the painting and calls this with each rough version as it arrives (1–3 of them), seconds since the call began. */
+  onPartial?: (p: { index: number; base64: string; seconds: number }) => void;
+  partials?: number;
 }): Promise<SketchResult> {
   const doFetch = opts.fetchImpl ?? fetch;
   // The closest sizes the models take; code scales the result to the canvas.
-  const size = opts.aspect === "1:1" ? "1024x1024" : "1024x1536";
+  const size = opts.size ?? (opts.aspect === "1:1" ? "1024x1024" : "1024x1536");
+  const quality = opts.quality ?? IMAGE_OPENAI.quality;
+  const stream = !!opts.onPartial;
   let last = "";
   for (const model of opts.model ? [opts.model] : [...IMAGE_OPENAI.models]) {
     const started = Date.now();
@@ -30,8 +38,12 @@ export async function paintOpenAI(opts: {
         form.set("model", model);
         form.set("prompt", opts.text.slice(0, 30000));
         form.set("size", size);
-        form.set("quality", IMAGE_OPENAI.quality);
+        form.set("quality", quality);
         form.set("n", "1");
+        if (stream) {
+          form.set("stream", "true");
+          form.set("partial_images", String(opts.partials ?? 2));
+        }
         opts.images.forEach((img, i) => {
           const ext = img.mediaType.split("/")[1] ?? "png";
           form.append("image[]", new Blob([Buffer.from(img.base64, "base64")], { type: img.mediaType }), `ref-${i + 1}.${ext}`);
@@ -41,12 +53,34 @@ export async function paintOpenAI(opts: {
         res = await doFetch("https://api.openai.com/v1/images/generations", {
           method: "POST",
           headers: { authorization: `Bearer ${opts.apiKey}`, "content-type": "application/json" },
-          body: JSON.stringify({ model, prompt: opts.text, size, quality: IMAGE_OPENAI.quality, n: 1 }),
+          body: JSON.stringify({ model, prompt: opts.text, size, quality, n: 1, ...(stream ? { stream: true, partial_images: opts.partials ?? 2 } : {}) }),
           signal: AbortSignal.timeout(opts.timeoutMs ?? 240_000),
         });
       }
     } catch (err) {
       return { ok: false, model, error: `${model}: ${err instanceof Error ? err.name : "request failed"}`, billed: true };
+    }
+    if (stream && res.ok && res.body) {
+      // Server-sent events: "...partial_image" events carry rough versions, "...completed" the final one.
+      let b64: string | undefined;
+      let buf = "";
+      const decoder = new TextDecoder();
+      for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+        buf += decoder.decode(chunk, { stream: true });
+        let cut: number;
+        while ((cut = buf.indexOf("\n\n")) >= 0) {
+          const block = buf.slice(0, cut);
+          buf = buf.slice(cut + 2);
+          const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("");
+          if (!data || data === "[DONE]") continue;
+          const ev = JSON.parse(data) as { type?: string; b64_json?: string; partial_image_index?: number };
+          if (ev.type?.endsWith("partial_image") && ev.b64_json) opts.onPartial!({ index: ev.partial_image_index ?? 0, base64: ev.b64_json, seconds: (Date.now() - started) / 1000 });
+          if (ev.type?.endsWith("completed") && ev.b64_json) b64 = ev.b64_json;
+        }
+      }
+      const seconds = Math.round((Date.now() - started) / 1000);
+      if (!b64) return { ok: false, model, error: `${model} streamed no final image`, billed: true };
+      return { ok: true, model, mediaType: "image/png", base64: b64, usd: IMAGE_OPENAI.usdPerImage[model] ?? OPENAI_WORST_USD, seconds };
     }
     const seconds = Math.round((Date.now() - started) / 1000);
     const json = (await res.json().catch(() => ({}))) as { error?: { message?: string; code?: string }; data?: { b64_json?: string }[] };
