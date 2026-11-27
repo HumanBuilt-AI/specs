@@ -1,0 +1,129 @@
+{
+  "meta": {
+    "chunk_id": "visual-system",
+    "domain": "visual",
+    "depends_on": [
+      "positioning-core"
+    ],
+    "token_count": 520,
+    "confidence": "medium",
+    "sources": [
+      {
+        "upload": "Scott's Good Company asset folder",
+        "location": "palette.json, brand.css, fonts/ (Nov 26 live test)"
+      }
+    ],
+    "version": 1,
+    "fictional": true,
+    "summary": "A neighborhood record shop's flyer pinned by the register: cream paper, plum ink, one hit of record-label red. Fraunces for the wordmark and headlines, Plus Jakarta Sans for everything else. Draft for the Nov 27 poster spike; check against palette.json."
+  },
+  "concept": "A flyer pinned by the register of a record shop that's been there for years: paper that's been handled, plum ink, a red dot like a record label.",
+  "color": {
+    "cream": {
+      "hex": "#F5EEE3",
+      "name": "Sleeve cream",
+      "role": "Paper. The ground of every post and poster.",
+      "rule": "Cream does most of the work, because the brand reads as printed paper first."
+    },
+    "plum": {
+      "hex": "#361E39",
+      "name": "Plum ink",
+      "role": "Headlines, body, the logo on light grounds.",
+      "rule": "All small type is plum on cream (about 14:1). The logo is plum only on cream or light paper: plum on plum disappears."
+    },
+    "red": {
+      "hex": "#BE3042",
+      "name": "Label red",
+      "role": "One accent: a word of the headline, a date box, bullet dots, the record label.",
+      "rule": "Red is the record label in the logo, so it means 'this one'. One red idea per post; large type (48px+) or marks only."
+    },
+    "pine": {
+      "hex": "#2E4636",
+      "name": "Pine (seasonal)",
+      "role": "Holiday pieces only: a painted band or a sprig.",
+      "rule": "Seasonal, not core. Only when the brief is a holiday piece, and only as art or a band with cream type on it (about 9:1)."
+    }
+  },
+  "pairings": {
+    "allowed": [
+      [
+        "plum",
+        "cream"
+      ],
+      [
+        "red",
+        "cream"
+      ],
+      [
+        "cream",
+        "plum"
+      ],
+      [
+        "cream",
+        "red"
+      ]
+    ],
+    "avoid": [
+      {
+        "pair": [
+          "plum",
+          "red"
+        ],
+        "reason": "Red type on plum is muddy (about 2:1) and unreadable at any size."
+      },
+      {
+        "pair": [
+          "plum",
+          "plum"
+        ],
+        "reason": "The logo on a plum ground vanishes. On plum, the logo goes cream."
+      }
+    ]
+  },
+  "roles": {
+    "note": "Maps the shared post templates' color roles to this brand's colors.",
+    "background": "cream",
+    "text": "plum",
+    "heading": "plum",
+    "accent": "red",
+    "wordmark": "plum",
+    "label": "cream"
+  },
+  "type": {
+    "wordmark": {
+      "stand_in_font": "Fraunces",
+      "weight": 700,
+      "lockup": [
+        "good company"
+      ]
+    },
+    "heading": {
+      "stand_in_font": "Fraunces",
+      "weight": 800,
+      "letter_spacing": "-0.02em",
+      "line_height": 0.9,
+      "min_px_at_1080": 64,
+      "variation": "\"SOFT\" 50, \"WONK\" 0, \"opsz\" 144"
+    },
+    "body": {
+      "stand_in_font": "Plus Jakarta Sans",
+      "weight": 600,
+      "line_height": 1.25,
+      "min_px_at_1080": 30
+    },
+    "label": {
+      "stand_in_font": "Plus Jakarta Sans",
+      "weight": 800,
+      "letter_spacing": "0.04em",
+      "min_px_at_1080": 28
+    }
+  },
+  "shape": {
+    "radius_px": 2,
+    "stamp_rotation_deg": -3
+  },
+  "spacing": {
+    "safe_margin_px_at_1080": 56,
+    "unit_px": 8
+  }
+}

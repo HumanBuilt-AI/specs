@@ -1,0 +1,24 @@
+---
+chunk_id: positioning-core
+domain: positioning
+depends_on: []
+token_count: 260
+confidence: medium
+sources:
+  - upload: Scott's Good Company asset folder
+    location: brand.json, content/*.txt (Nov 26 live test)
+version: 1
+fictional: true
+summary: >-
+  Good Company Records & CDs is a record shop in Minneapolis's North Loop, run
+  by Alex and Ben (and their dogs Otis and June). Tagline: "Find a record. Stay
+  for the company." Fictional brand for testing Specs.
+---
+business: Good Company Records & CDs
+what: A neighborhood record and CD shop with a listening lounge.
+where: North Loop, Minneapolis
+owners: Alex and Ben
+dogs: Otis and June
+tagline: "Find a record. Stay for the company."
+facts_not_known:
+  - Address, hours, prices. Never put one on a post unless the brief gives it.
