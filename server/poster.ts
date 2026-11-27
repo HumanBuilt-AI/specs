@@ -84,8 +84,10 @@ export async function startPoster(req: Request, deps: Deps, startBackground: Sta
   const post = session.posts[body.postId];
   if (!post) throw new Refusal(404, "no_post", "There's no such post in this session.");
   if (post.status !== "written") throw new Refusal(409, "not_ready", `This post can't become a poster yet (it's ${post.status}).`);
-  const existing = await loadPosterJob(deps.kv, body.sessionId, body.postId);
-  if (existing) return json(posterView(existing));
+  // A job that failed gave the visit its poster back, so it can be started again.
+  const found = await deps.kv.get<PosterJob>(posterKey(body.sessionId, body.postId));
+  const existing = found?.value ?? null;
+  if (existing && existing.status !== "failed") return json(posterView(existing));
 
   // Claim the session's one poster before any work, so two tabs can't both take it.
   await updateSession(deps.kv, body.sessionId, (s) => {
@@ -94,7 +96,9 @@ export async function startPoster(req: Request, deps: Deps, startBackground: Sta
     return { ...s, postersUsed: used + 1 };
   });
   const job: PosterJob = { status: "painting", token: crypto.randomUUID(), startedAt: now.toISOString(), updatedAt: now.toISOString(), stage: "Painting the poster", ran: false, attempts: [] };
-  if (!(await deps.kv.put(posterKey(body.sessionId, body.postId), job, { ifNew: true }))) {
+  const stored = found ? await deps.kv.put(posterKey(body.sessionId, body.postId), job, { ifMatch: found.etag }) : await deps.kv.put(posterKey(body.sessionId, body.postId), job, { ifNew: true });
+  if (!stored) {
+    await updateSession(deps.kv, body.sessionId, (s) => ({ ...s, postersUsed: Math.max(0, (s.postersUsed ?? 1) - 1) }));
     const j = await loadPosterJob(deps.kv, body.sessionId, body.postId);
     return json(j ? posterView(j) : null);
   }

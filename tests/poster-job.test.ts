@@ -29,7 +29,7 @@ async function setup(opts: { reads?: ((copy: string[]) => Partial<PosterRead>)[]
     if (o.step === "read_back") {
       const copy = copyFrom(o.user);
       const tweak = opts.reads?.[reads++]?.(copy) ?? {};
-      const data: PosterRead = { text: copy, logo_text: [], logo: "same", logo_count: 1, logo_notes: "", photo: (o.images?.length ?? 0) === 3 ? "same" : "none_given", photo_notes: "", hard_to_read: [], ...tweak };
+      const data: PosterRead = { text: copy, photo_text: [], logo_text: [], logo: "same", logo_count: 1, logo_notes: "", photo: (o.images?.length ?? 0) === 3 ? "same" : "none_given", photo_notes: "", hard_to_read: [], ...tweak };
       return { data: data as never, usage: { step: o.step, model: "claude-sonnet-5-5", input: 1, output: 1, cacheRead: 0, cacheWrite: 0, usd: 0.02 } };
     }
     if (o.step === "compose_print") return { data: { ...COMPOSED, rationale: [...COMPOSED.rationale, { decision: "art zones", choice: "A big record lower right.", reason: "Room for type top left.", cites: [] }] } as never, usage: { step: o.step, model: "claude-sonnet-5-5", input: 1, output: 1, cacheRead: 0, cacheWrite: 0, usd: 0.1 } };
@@ -126,6 +126,11 @@ test("one poster per visit, a repeated trigger spends nothing, and a painter err
   const job = await b.status();
   assert.equal(job.status, "failed");
   assert.match(String(job.error), /didn't paint/);
+  // Our failure gives the visit its poster back, so the owner can try again.
+  const again = await b.start();
+  assert.equal(again.status, 202, "a failed job can be started again");
+  assert.equal(b.triggers.length, 2);
+  assert.notEqual(b.triggers[0]!.token, b.triggers[1]!.token, "the retry gets a fresh token");
 });
 
 test("posters refuse to start without the painter's key", async () => {
