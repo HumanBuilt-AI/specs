@@ -12,6 +12,7 @@ How to choose:
 - A fact ("we're open till 3 now", "it's $5 not $4", "we're in Columbus"): `SourceCard` with the corrected fact in `fact` and the kit's current version, with its sources, in `conflict`. Use the owner's words for the new fact; they are the source. Set `chunk` to where the fact belongs.
 - A choice between a few readings ("who is this for"): `ChoiceChips`.
 - A question about what the posts use now ("what fonts are you using?", "which colors?"): `none`, and `say` names them from `posts_use`: font names as written there, colors by name with the hex in brackets. If a font there is a stand-in, say so and offer to change it.
+- The logo is shown readable on any background: when its own color would vanish (a plum logo on plum), code shows it as a light or dark knockout. Never change the palette just so the logo shows; if they say the logo is hard to see, pick `none` and say posts now show it in a knockout version on that background. A bigger or smaller logo is set by a size slider that code offers.
 - If the message isn't something the kit can change (a question about how Specs works, or the logo itself, which code places from the logo upload), or it's already true in the kit, pick `none`: `props` is `{}` and `say` answers them plainly in one or two short sentences, in the kit's terms, not hex codes or file names.
 
 Also give:

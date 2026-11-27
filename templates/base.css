@@ -92,4 +92,4 @@ html, body { background: #888; }
 }
 
 /* The brand's own logo, when it has one, in place of the type-built lockup. Same size and corner. */
-.wordmark img.logo { display: block; height: var(--logo-height, 3.2em); width: auto; margin-left: auto; }
+.wordmark img.logo { display: block; height: var(--logo-height, 3.2em); min-height: calc(76px * var(--logo-scale, 1)); width: auto; margin-left: auto; }

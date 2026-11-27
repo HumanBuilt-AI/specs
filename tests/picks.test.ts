@@ -9,7 +9,7 @@ import { EXTRACT_CHUNKS } from "../core/extract.ts";
 import { findGaps, type IntakeChunks } from "../core/intake.ts";
 import { triage } from "../core/triage.ts";
 import { kitFromChunks } from "../core/session-kit.ts";
-import { PICKS_SOURCE, deltaE, guessPurpose, paletteCandidates, paletteText, suggestPalette, typedHexes } from "../core/picks.ts";
+import { PICKS_SOURCE, deltaE, knockoutPixels, guessPurpose, paletteCandidates, paletteText, suggestPalette, typedHexes } from "../core/picks.ts";
 import { makeDeps, jsonReq, formReq, body, DRAFT } from "./helpers.ts";
 
 const run = (fn: () => Promise<Response>) => respond(fn);
@@ -123,4 +123,17 @@ test("picks endpoint: saved before drafting, lead their chunk, and are refused o
   assert.equal(art.draft.items[0]!.value, "Hero photos: storefront.jpg");
 
   assert.equal((await pick({ fonts: { heading: "Inter", body: "Inter" } })).status, 409, "after drafting starts, the chat changes the kit instead");
+});
+
+test("a logo that would vanish on its background becomes a knockout; one that reads, or a badge, stays", () => {
+  const pixel = (h: string, a = 255) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16), a];
+  // A plum wordmark with a red mark, on transparency.
+  const logo = () => [...Array(40).fill(pixel(PLUM)), ...Array(10).fill(pixel(RED)), ...Array(50).fill(pixel("#000000", 0))].flat();
+  const onPlum = logo();
+  assert.equal(knockoutPixels(onPlum, PLUM, CREAM), true);
+  assert.deepEqual(onPlum.slice(0, 4), pixel(CREAM), "plum ink is redrawn in the cream text color");
+  assert.deepEqual(onPlum.slice(40 * 4, 40 * 4 + 4), pixel(RED), "the red mark, which reads, keeps its color");
+  assert.equal(knockoutPixels(logo(), CREAM, PLUM), false, "plum reads on cream");
+  const badge = [...Array(100).fill(pixel(PLUM))].flat();
+  assert.equal(knockoutPixels(badge, PLUM, CREAM), false, "a logo with its own solid background shows as a badge");
 });

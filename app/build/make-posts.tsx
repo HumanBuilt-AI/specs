@@ -14,7 +14,7 @@ import type { PropsOf } from "../../core/catalog.ts";
 import { call, callAgainIfDropped, isDropped, type ApiError } from "../lib/api.ts";
 import { PostPreview } from "../ui/catalog/PostPreview.tsx";
 import { withFontFiles } from "../lib/fonts.ts";
-import { logoDataUrl } from "../lib/logo.ts";
+import { logoDataUrl, useLogoFor } from "../lib/logo.ts";
 import { KitDownload } from "../ui/KitDownload.tsx";
 import { Working } from "../ui/working.tsx";
 import { renderPost } from "../lib/render-post.ts";
@@ -76,7 +76,9 @@ export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: st
   const [kit, setKit] = useState<Kit | null>(null);
   const [kitError, setKitError] = useState<string | null>(null);
   const [photos, setPhotos] = useState<Record<string, string>>({});
-  const [logo, setLogo] = useState<string | null>(null);
+  const [logoRaw, setLogo] = useState<string | null>(null);
+  // A logo that would vanish on the kit's background is shown as a knockout.
+  const logo = useLogoFor(logoRaw, kit?.tokensCss);
   const [intent, setIntent] = useState<PostIntent>("promo");
   const [goal, setGoal] = useState("");
   const [details, setDetails] = useState("");

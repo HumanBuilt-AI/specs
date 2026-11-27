@@ -470,3 +470,5 @@ main.kitpage .kitpage-lede { max-width: 42rem; }
 .dropped li:has(.purpose) { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; }
 @media (max-width: 560px) { .dropped li:has(.purpose) { grid-template-columns: minmax(0, 1fr) auto; } .dropped li:has(.purpose) .purpose { grid-column: 1 / -1; grid-row: 2; } }
 @media (max-width: 560px) { .role-slots { grid-template-columns: repeat(3, minmax(0, 1fr)); } .role-chip { height: 32px; } .role-slot { padding: var(--s2); } }
+/* A logo of any color shows on half light, half dark. */
+.photo-tile.logo-tile img { background: linear-gradient(90deg, #f4f4f2 50%, #1a1a1c 50%); }
