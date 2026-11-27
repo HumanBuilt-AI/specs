@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { call, type ApiError } from "../lib/api.ts";
 import { withPlate } from "../../core/print.ts";
+import { logoRect } from "../../core/poster.ts";
 import { Working } from "../ui/working.tsx";
 import { Thumb } from "./bold-version.tsx";
 
@@ -35,6 +36,27 @@ async function fetchDataUrl(path: string, body: unknown): Promise<string> {
     r.onerror = () => reject(new Error("The poster couldn't be loaded."));
     r.readAsDataURL(blob);
   });
+}
+
+/** The painted poster with the owner's real logo set in the logo spot (the painter leaves it as plain paper). */
+async function withLogo(painted: string, logo: string | null): Promise<string> {
+  if (!logo) return painted;
+  try {
+    const [art, mark] = [new Image(), new Image()];
+    art.src = painted;
+    mark.src = logo;
+    await Promise.all([art.decode(), mark.decode()]);
+    const canvas = document.createElement("canvas");
+    canvas.width = art.naturalWidth;
+    canvas.height = art.naturalHeight;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(art, 0, 0);
+    const r = logoRect(canvas.width, canvas.height, mark.naturalWidth, mark.naturalHeight);
+    ctx.drawImage(mark, r.x, r.y, r.w, r.h);
+    return canvas.toDataURL("image/png");
+  } catch {
+    return painted;
+  }
 }
 
 /** A full-size PNG of a page, for the backup version's download. */
@@ -69,15 +91,18 @@ export function PosterCard(props: {
   sessionId: string;
   postId: string;
   aspect: "1:1" | "4:5";
+  /** The owner's logo (already redrawn to read on the kit's background), set by code on the painting. */
+  logo: string | null;
   /** Builds a full post page from the backup's type layer, with this post's copy, photo and kit look. */
   pageForB: (b: PosterB) => string;
   /** False once this visit's poster is used on another post. */
   available: boolean;
   onStart: () => void;
 }) {
-  const { sessionId, postId, aspect, pageForB, available, onStart } = props;
+  const { sessionId, postId, aspect, logo, pageForB, available, onStart } = props;
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [painted, setPainted] = useState<string | null>(null);
   const [image, setImage] = useState<string | null>(null);
   const [page, setPage] = useState<string | null>(null);
   const [download, setDownload] = useState<string | null>(null);
@@ -109,9 +134,18 @@ export function PosterCard(props: {
 
   // A painting passed: fetch it.
   useEffect(() => {
-    if (job?.status !== "done" || image) return;
-    fetchDataUrl("/api/posters/image", { sessionId, postId }).then(setImage, (e: Error) => setError(e.message));
-  }, [job, image, sessionId, postId]);
+    if (job?.status !== "done" || painted) return;
+    fetchDataUrl("/api/posters/image", { sessionId, postId }).then(setPainted, (e: Error) => setError(e.message));
+  }, [job, painted, sessionId, postId]);
+  // Set the real logo on it (again, if the logo arrives or changes later).
+  useEffect(() => {
+    if (!painted) return;
+    let live = true;
+    void withLogo(painted, logo).then((x) => live && setImage(x));
+    return () => {
+      live = false;
+    };
+  }, [painted, logo]);
 
   // The backup: fetch the plate, set the real type over it, and make the download.
   useEffect(() => {
@@ -173,7 +207,7 @@ export function PosterCard(props: {
         <figcaption>
           <b>Your poster</b>
           <span className="muted small">
-            Painted with an image model. Every word, your logo and your photo were checked against the kit.
+            Painted with an image model, with your real logo set on top. Every word and your photo were checked against the kit.
             {repainted ? " The first painting missed a check, so it was repainted." : ""}
           </span>
           {image && (

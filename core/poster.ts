@@ -15,8 +15,30 @@ export const PosterReadSchema = z.object({
   photo: z.enum(["same", "changed", "missing", "none_given"]).describe("Is the owner's photo on the poster as given (cropped or tinted is fine), or are its people, signs or place repainted or invented?"),
   photo_notes: z.string(),
   hard_to_read: z.array(z.string()).describe("Copy from the brief that is there but hard to read on a phone. Empty if none."),
+  logo_spot_clear: z.boolean().describe("Is the logo spot described in the brief plain paper, with no words, marks or illustration in it? True when no logo spot was asked for."),
 });
 export type PosterRead = z.infer<typeof PosterReadSchema>;
+
+/**
+ * Where code sets the owner's real logo on a painted poster, as fractions of the canvas (Nov 27
+ * speed run 2: painted logos came back misspelled, "HINNEAPOLIS", or twice). The painter keeps a
+ * larger clear area around it (`clear`), so the logo sits on calm paper.
+ */
+export const LOGO_SPOT = { x: 0.06, y: 0.05, w: 0.24, h: 0.11, clear: { w: 0.34, h: 0.18 } } as const;
+
+/** Where the logo lands on a canvas: fitted inside the spot, aspect kept, top-left aligned. Pixels. */
+export function logoRect(canvasW: number, canvasH: number, logoW: number, logoH: number) {
+  const boxW = canvasW * LOGO_SPOT.w;
+  const boxH = canvasH * LOGO_SPOT.h;
+  const scale = Math.min(boxW / Math.max(1, logoW), boxH / Math.max(1, logoH));
+  return { x: Math.round(canvasW * LOGO_SPOT.x), y: Math.round(canvasH * LOGO_SPOT.y), w: Math.round(logoW * scale), h: Math.round(logoH * scale) };
+}
+
+/** The logo spot in words, for the painter and the proofreader. */
+export function logoSpotWords(): string {
+  const pct = (f: number) => `${Math.round(f * 100)}%`;
+  return `the top-left corner, from the left edge to ${pct(LOGO_SPOT.clear.w)} across and from the top edge to ${pct(LOGO_SPOT.clear.h)} down`;
+}
 
 export type PosterVerdict = {
   pass: boolean;
@@ -47,8 +69,10 @@ const FILLER = new Set(["&", "and", "a", "an", "the", "of", "at", "in", "on", "f
  * Judge a read-back against the copy the poster was given. `copy` is every text slot's value.
  * `photoGiven` is false when the poster has no owner photo to keep; `logoGiven` false when there's no logo file to match.
  */
-export function judgePoster(read: PosterRead, copy: string[], opts: { photoGiven: boolean; logoGiven?: boolean }): PosterVerdict {
-  const logoGiven = opts.logoGiven ?? true;
+export function judgePoster(read: PosterRead, copy: string[], opts: { photoGiven: boolean; logoGiven?: boolean; logoByCode?: boolean }): PosterVerdict {
+  const logoByCode = opts.logoByCode ?? false;
+  // With the logo set by code, the painting itself must have none: the painted marks are what failed.
+  const logoGiven = (opts.logoGiven ?? true) && !logoByCode;
   const want = new Set(copy.flatMap(words));
   // The logo's own words and the words already in the owner's photo (its signs) aren't painted copy.
   // Nov 27 live run: the painter erased the shop's real sign to obey "no other words", and failed the photo check.
@@ -73,6 +97,8 @@ export function judgePoster(read: PosterRead, copy: string[], opts: { photoGiven
     ...(logoGiven && read.logo === "redrawn" ? [`the logo is redrawn instead of the brand's own mark (${read.logo_notes})`] : []),
     ...(logoGiven && read.logo === "missing" ? ["the logo is missing"] : []),
     ...(logoGiven && read.logo !== "missing" && read.logo_count > 1 ? [`the logo appears ${read.logo_count} times; it should appear once`] : []),
+    ...(logoByCode && (read.logo !== "missing" || read.logo_count > 0) ? ["a logo is painted on the poster; leave it out, the real one is set in the logo spot afterwards"] : []),
+    ...(logoByCode && !read.logo_spot_clear ? ["the logo spot isn't plain paper; keep it empty for the real logo"] : []),
     ...(opts.photoGiven && read.photo === "changed" ? [`the owner's photo is repainted or changed (${read.photo_notes}); keep it as given`] : []),
     ...(opts.photoGiven && read.photo === "missing" ? ["the owner's photo is missing"] : []),
   ];

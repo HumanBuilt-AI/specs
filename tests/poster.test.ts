@@ -2,7 +2,7 @@
 // Every model reply here is fake, so these cost nothing.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { judgePoster, repaintNote, words, PosterReadSchema, type PosterRead } from "../core/poster.ts";
+import { judgePoster, logoRect, LOGO_SPOT, repaintNote, words, PosterReadSchema, type PosterRead } from "../core/poster.ts";
 import { paintOpenAI } from "../core/image-openai.ts";
 import { loadPrompt } from "../spike/lib/prompts.ts";
 
@@ -15,6 +15,7 @@ const COPY = [
 
 const clean: PosterRead = {
   photo_text: [],
+  logo_spot_clear: true,
   text: ["HOLIDAY", "LISTENING PARTY", "A night of music discovery, good drinks & great company.", "12/20/26 · 4:20PM - 10PM", "Alcoholic cocktails · Mocktails · Small food offerings"],
   logo_text: ["Good Company", "Records & CDs · Minneapolis"],
   logo: "same",
@@ -77,7 +78,7 @@ test("words() treats dashes and punctuation alike", () => {
 });
 
 test("the read-back prompt fills with and without a photo, and the schema takes a model reply", () => {
-  const withPhoto = loadPrompt("read-back", { copy: COPY.join("\n"), photo_line: "The owner's photo is the third." });
+  const withPhoto = loadPrompt("read-back", { copy: COPY.join("\n"), photo_line: "The owner's photo is the third.", logo_line: "The logo spot is the top-left corner." });
   assert.match(withPhoto.user, /photo is the third/);
   assert.match(withPhoto.system, /logo_text/);
   assert.equal(PosterReadSchema.safeParse(clean).success, true);
@@ -105,4 +106,25 @@ test("the OpenAI painter moves to the next model on a 404 and never sends the ke
 test("words already in the owner's photo, like the shop's own sign, aren't invented copy", () => {
   const v = judgePoster({ ...clean, photo_text: ["good company RECORDS & CDs"], text: [...clean.text, "good company RECORDS & CDs"] }, COPY, { photoGiven: true });
   assert.equal(v.pass, true, v.problems.join("; "));
+});
+
+test("with the logo set by code, a painted logo or a cluttered logo spot fails, and an empty spot passes", () => {
+  const empty = { ...clean, logo: "missing" as const, logo_count: 0, logo_text: [] };
+  assert.equal(judgePoster(empty, COPY, { photoGiven: true, logoByCode: true }).pass, true);
+  // Nov 27 speed run 2: the painter misspelled the logo's small line and painted it twice.
+  const painted = judgePoster({ ...clean, logo: "redrawn", logo_count: 2 }, COPY, { photoGiven: true, logoByCode: true });
+  assert.equal(painted.pass, false);
+  assert.match(painted.problems.join(), /a logo is painted/);
+  assert.doesNotMatch(painted.problems.join(), /appears 2 times/);
+  const cluttered = judgePoster({ ...empty, logo_spot_clear: false }, COPY, { photoGiven: true, logoByCode: true });
+  assert.match(cluttered.problems.join(), /logo spot isn't plain paper/);
+});
+
+test("the logo fits inside its spot, keeping its shape", () => {
+  const wide = logoRect(1024, 1536, 800, 200);
+  assert.deepEqual([wide.x, wide.y], [61, 77]);
+  assert.ok(wide.w <= 1024 * LOGO_SPOT.w + 1 && wide.h <= 1536 * LOGO_SPOT.h + 1);
+  assert.ok(Math.abs(wide.w / wide.h - 4) < 0.05);
+  const tall = logoRect(1080, 1080, 300, 600);
+  assert.ok(tall.h <= 1080 * LOGO_SPOT.h + 1 && Math.abs(tall.w / tall.h - 0.5) < 0.05);
 });

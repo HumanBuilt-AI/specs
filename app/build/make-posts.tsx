@@ -364,6 +364,7 @@ export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: st
                     sessionId={sessionId}
                     postId={p.id}
                     aspect={p.bold.aspect}
+                    logo={logo}
                     available={postersLeft > 0}
                     onStart={() => setPostersLeft(0)}
                     pageForB={(b) =>
