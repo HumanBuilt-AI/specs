@@ -1,0 +1,19 @@
+---
+chunk_id: guardrails
+domain: guardrails
+depends_on: [positioning-core]
+token_count: 120
+confidence: medium
+sources:
+  - upload: Specs defaults
+    location: guardrails template
+version: 1
+fictional: true
+summary: >-
+  Only facts from the brief or positioning-core. No invented prices, hours,
+  addresses, people or store photos.
+---
+never:
+  - Invent a price, hour, address, award or date.
+  - Show invented people or an invented store as if they were real photos of Good Company.
+  - Recolor or redraw the logo.

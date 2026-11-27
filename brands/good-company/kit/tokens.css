@@ -1,0 +1,36 @@
+/* Generated from visual-system.json by spike/build-tokens.ts. Do not edit by hand. */
+:root {
+  --color-cream: #F5EEE3; /* Sleeve cream */
+  --color-plum: #361E39; /* Plum ink */
+  --color-red: #BE3042; /* Cherry */
+  --color-pine: #2E4636; /* Pine (seasonal) */
+  --color-clay: #AA7063; /* Clay */
+  --color-sage: #AEAE9B; /* Sage */
+  --color-camel: #BD9E7B; /* Camel */
+  --font-wordmark: "Fraunces", system-ui, sans-serif;
+  --weight-wordmark: 700;
+  --font-heading: "Fraunces", system-ui, sans-serif;
+  --weight-heading: 800;
+  --tracking-heading: -0.02em;
+  --leading-heading: 0.9;
+  --min-size-heading: 64px;
+  --variation-heading: "SOFT" 50, "WONK" 0, "opsz" 144;
+  --font-body: "Plus Jakarta Sans", system-ui, sans-serif;
+  --weight-body: 600;
+  --leading-body: 1.25;
+  --min-size-body: 30px;
+  --font-label: "Plus Jakarta Sans", system-ui, sans-serif;
+  --weight-label: 800;
+  --tracking-label: 0.04em;
+  --min-size-label: 28px;
+  --radius: 2px;
+  --stamp-rotation: -3deg;
+  --safe-margin: 56px;
+  --unit: 8px;
+  --role-background: var(--color-cream);
+  --role-text: var(--color-plum);
+  --role-heading: var(--color-plum);
+  --role-accent: var(--color-red);
+  --role-wordmark: var(--color-plum);
+  --role-label: var(--color-cream);
+}

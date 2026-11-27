@@ -1,0 +1,29 @@
+# The Nov 27 poster spike's brief (spike/plate.ts). The same copy as Scott's two Holiday
+# Listening Party posters (Specs-style and image-model), so the builds compare directly.
+id: holiday-listening-party
+intent: event poster
+goal: Bring regulars and new faces to the shop for a holiday listening party on Dec 20.
+aspect: "1:1"
+direction: >-
+  A printed event poster with one big idea, like reference 1: the headline is a wall of
+  heavy, tight type, as big as the canvas allows (at least 150px), and the record is the
+  hero it overlaps. Everything else stays small and quiet.
+season: holiday (deep pine green and holly red are allowed as one extra seasonal color)
+photo: uploads/listening-lounge.webp
+reads_as: "good company / Holiday Listening Party / A night of music discovery, good drinks & great company. / 12/20/26 4:20PM – 10PM / Alcoholic cocktails · Mocktails · Small food offerings"
+slots:
+  headline: "Holiday Listening Party"
+  subhead: "A night of music discovery, good drinks & great company."
+  date: "12/20/26 · 4:20PM – 10PM"
+  details: "Alcoholic cocktails · Mocktails · Small food offerings"
+# Scott's reference posters, in brands/good-company/references/. Not the target poster.
+references:
+  - file: references/01-damn-the-man.webp
+    borrow: "one giant, tight, heavy headline filling the width; a single huge red record as the hero, overlapping the type; worn screen-print texture on the record; tiny details set small along the bottom"
+    ignore: its words, film credits and logo
+  - file: references/02-onsite-records.webp
+    borrow: "candid film photo with flash and grain, warm and real; a confident sentence-case headline in a clean sans; a small brand line under it"
+    ignore: the person, its words and logo (and text set straight on a photo, which our rules don't allow)
+  - file: references/03-vinyl-kind-of-people.webp
+    borrow: "flat geometric record drawn in concentric lines with one bold color ring; lots of empty space; small spaced capitals as the only line"
+    ignore: its words and the dark background (Good Company is cream paper)

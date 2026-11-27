@@ -22,6 +22,7 @@ cp .env.example .env             # then paste your API key after ANTHROPIC_API_K
 | `npm run spike -- spike/extract.ts half-acre-club` | Phase 4 gate: extracts a kit from the brand's messy uploads and compares it with the hand-built kit | Yes, roughly $0.30–0.50 |
 | `npm run spike -- spike/compose.ts third-shift-slice` | Phase 6: lays out the brand's packed demo posts from its `layout-system` chunk instead of the shared templates, and writes a template-vs-composed page to `output/compose-<run-id>/` (same photo and copy, only the layout changes) | Yes, under $0.50 |
 | `npm run review-extract -- output/extract-<run-id>` | Rebuilds an extraction run's page from its `run.json`, scored against the current checklist | No |
+| `npm run spike -- spike/plate.ts [--image gemini\|openai\|both]` | Poster spike (Nov 27): Good Company's holiday poster three ways (A: HTML with references and print textures; B: image-model plate, real type on top; C: image model paints everything, words read back), judged blind beside today's post and Scott's target. Writes `output/plate-<run-id>/` | Yes, about $2–3 (Claude plus 3 Gemini images) |
 
 Open `output/<run-id>/index.html` in a browser to review a run. Tick "I'd show this to a client" and pick the better post per brief; the tally at the top is the phase 2 gate. **Blind mode** hides the labels and reasoning and shuffles sides, for asking a designer friend.
 

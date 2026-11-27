@@ -10,7 +10,10 @@ export const STEPS = {
   // with a larger CSS toolkit, and a creative director picks the strongest from the renders.
   directions: { model: "claude-sonnet-5-5", max_tokens: 6000, effort: "medium" },
   compose_bold: { model: "claude-sonnet-5-5", max_tokens: 20000, effort: "high" },
+  compose_print: { model: "claude-sonnet-5-5", max_tokens: 32000, effort: "high" }, // poster spike: print layouts with art zones run longer than posts
   art_critique: { model: "claude-sonnet-5-5", max_tokens: 6000, effort: "medium" },
+  // Poster spike (Nov 27): reads every word an image model painted, to check it against the copy.
+  read_back: { model: "claude-sonnet-5-5", max_tokens: 3000, effort: "low" },
   critique: { model: "claude-haiku-5-5", max_tokens: 8000, effort: "medium" }, // upgrade if it misses issues
   // Extraction (phase 4). Each call has to finish inside the deployed function's ~26 s Claude
   // timeout, so reading runs at low effort and assembling drafts one chunk per call.
@@ -31,6 +34,16 @@ export const SKETCH = {
   imageSize: "1K",
   usdPerImage: { "gemini-3-pro-image": 0.134, "gemini-3-pro-image-preview": 0.134, "gemini-nano-banana-2.1": 0.067 } as Record<string, number>,
   takes: 3,
+} as const;
+
+// OpenAI's image models (Nov 27 poster spike only), key OPENAI_API_KEY in .env. The newest names
+// weren't certain when this was written (Nov 27, 2026: OpenAI's docs list a 2.5 and a 2.6
+// family), so the first name the account can use wins. Prices are GPT Image 1.5's high-quality
+// square rate from OpenAI's model page; the newer models' prices weren't listed. Check before relying on them.
+export const IMAGE_OPENAI = {
+  models: ["gpt-image-2.6", "gpt-image-2.5-sunburst", "gpt-image-2.5", "gpt-image-1.5", "gpt-image-1"],
+  quality: "high",
+  usdPerImage: { "gpt-image-2.6": 0.2, "gpt-image-2.5-sunburst": 0.2, "gpt-image-2.5": 0.2, "gpt-image-1.5": 0.133, "gpt-image-1": 0.167 } as Record<string, number>,
 } as const;
 
 // USD per million tokens, for the cost line on the review page. Check current pricing before relying on it.

@@ -1,0 +1,12 @@
+# Fictional: Good Company Records & CDs is a test brand Scott made (Nov 26, 2026), from his
+# good-company-brand-kit folder (content/brand.json). Photos are his generated stand-ins.
+brand: good-company
+business_name: Good Company Records & CDs
+business_line: An independent record and CD shop with a midcentury listening lounge in Minneapolis's North Loop.
+photos:
+  - file: uploads/listening-lounge.webp
+    alt: A customer listens on headphones beside a turntable and CD player while two people work at a shared table.
+  - file: uploads/store-interior.webp
+    alt: Walnut vinyl bins and CD shelves lead to a comfortable midcentury listening lounge at Good Company.
+  - file: uploads/owners-and-dogs.webp
+    alt: Owners Alex and Ben outside Good Company Records with their dogs Otis and June.

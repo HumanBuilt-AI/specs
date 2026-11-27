@@ -90,7 +90,7 @@ export async function callStructured<S extends z.ZodType>(
     messages: [{ role: "user", content }],
     ...(tools ? { tools } : {}),
     ...(useFallback ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
-  });
+  }, cfg.max_tokens > 20000 ? { timeout: 900_000 } : undefined); // past ~21k output the SDK wants streaming unless the call names its own timeout
 
   const u = response.usage;
   const usage: Usage = {
