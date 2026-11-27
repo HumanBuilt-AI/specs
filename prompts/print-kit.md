@@ -16,3 +16,7 @@ This piece is a printed flyer or poster as much as a post. It should look printe
 Layer several: grain over the whole canvas, speckle over a color band, wear on the big type. Each should be visible in the render without making text hard to read.
 
 **Print moves** that pass the code checks: photo prints (a cream or paper border, 2–4° tilt, a soft `box-shadow` in a kit color mixed with transparent), tape strips (the toolkit's `tape`), torn paper edges (`clip-path` with 20+ jittered points), a vinyl record (nested circles with `border-radius: 50%` and `repeating-radial-gradient` grooves in kit colors), a painted band behind the details (a toolkit `brush-block`, wide and low), red dots as bullets (`::before` with `content: ""`).
+
+# User
+
+Build a printed piece.
