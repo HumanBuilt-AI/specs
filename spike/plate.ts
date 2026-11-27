@@ -7,9 +7,11 @@
 //   B. Painted plate, real type on top (the option Scott chose):
 //      1. Claude lays out the type layer (compose-bold + print-kit + plate-type) and says where
 //         the art goes ("art zones").
-//      2. Code renders a wireframe of that layout (gray blocks, nothing readable).
-//      3. The image model paints a text-free plate around the blocks from the references
-//         (prompts/plate.md), PLATE_TAKES times.
+//      2. Code measures where each slot sits and tells the painter in words (shown a gray
+//         wireframe, run 1's painter copied the blocks as patches; the wireframe is now only
+//         on the review page).
+//      3. The image model (Gemini, OpenAI or both: --image) paints a text-free plate around
+//         those areas from the references (prompts/plate.md), PLATE_TAKES times each.
 //      4. Code puts the plate under the type layer; Claude sees the result and fits the layer to
 //         the plate once (same prompt, the render attached).
 //   C. The image model paints the whole poster, words and logo included (prompts/poster-full.md).
@@ -19,8 +21,8 @@
 // Every candidate's words are read back from the render, so A and B are checked from pixels too.
 // Writes output/plate-<run-id>/index.html and a sheet PNG.
 //
-// Usage: npm run spike -- spike/plate.ts [--takes 2] [--skip-c]
-// Needs ANTHROPIC_API_KEY and GEMINI_API_KEY in .env. Neither is logged.
+// Usage: npm run spike -- spike/plate.ts [--image gemini|openai|both] [--takes N] [--skip-c]
+// Needs ANTHROPIC_API_KEY, plus GEMINI_API_KEY and/or OPENAI_API_KEY, in .env. None is logged.
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { join, relative, extname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -35,6 +37,7 @@ import { loadPrompt } from "./lib/prompts.ts";
 import { callStructured, type Image, type Usage } from "./lib/claude.ts";
 import { ArtCritiqueSchema, checkBold, fillEchoes, relevantIssues, type ArtCritique } from "../core/bold.ts";
 import { paintSketch, SKETCH_WORST_USD } from "../core/sketch.ts";
+import { paintOpenAI, OPENAI_WORST_USD } from "../core/image-openai.ts";
 import { PRINT_TEXTURE_CSS, WIREFRAME_CSS, withPlate } from "../core/print.ts";
 
 const BRAND = "good-company";
@@ -44,14 +47,18 @@ const argOf = (name: string) => {
   if (i < 0) return undefined;
   return args[i]!.includes("=") ? args[i]!.split("=")[1] : args[i + 1];
 };
-const PLATE_TAKES = Number(argOf("--takes") ?? 2);
+type Painter = "gemini" | "openai";
+const imageArg = argOf("--image") ?? "gemini";
+if (!["gemini", "openai", "both"].includes(imageArg)) throw new Error("--image must be gemini, openai or both");
+const painters: Painter[] = imageArg === "both" ? ["gemini", "openai"] : [imageArg as Painter];
+const PLATE_TAKES = Number(argOf("--takes") ?? (painters.length > 1 ? 1 : 2));
 const skipC = args.includes("--skip-c");
-const geminiKey = process.env.GEMINI_API_KEY;
-if (!geminiKey) throw new Error("GEMINI_API_KEY is missing from .env.");
+const keys: Record<Painter, string | undefined> = { gemini: process.env.GEMINI_API_KEY, openai: process.env.OPENAI_API_KEY };
+for (const p of painters) if (!keys[p]) throw new Error(`${p === "gemini" ? "GEMINI_API_KEY" : "OPENAI_API_KEY"} is missing from .env.`);
 
 // The brief, the photo, the logo and the references.
 type Ref = { file: string; borrow: string; ignore?: string };
-type Poster = { id: string; intent: string; goal: string; aspect: "1:1" | "4:5"; season?: string; photo: string; reads_as?: string; slots: Partial<Record<TextSlot, string>>; references: Ref[] };
+type Poster = { id: string; direction?: string; intent: string; goal: string; aspect: "1:1" | "4:5"; season?: string; photo: string; reads_as?: string; slots: Partial<Record<TextSlot, string>>; references: Ref[] };
 const poster = YAML.parse(readFileSync(join(brandDir(BRAND), "poster.yaml"), "utf8")) as Poster;
 const refs = poster.references ?? [];
 if (!refs.length) throw new Error("Add Scott's reference posters to brands/good-company/poster.yaml (references:) first.");
@@ -163,7 +170,7 @@ async function compose(o: { label: string; name: string; appendix: string; image
       business_name: briefs.business_name,
       intent: poster.intent,
       goal: poster.goal,
-      direction: `A printed event poster in this brand's voice, as strong as the reference posters.\n\n<references>\n${refList}\n</references>`,
+      direction: `${poster.direction ?? "A printed event poster in this brand's voice, as strong as the reference posters."}\n\n<references>\n${refList}\n</references>`,
       canvas,
       copy,
       photo: photoLine,
@@ -212,19 +219,38 @@ async function readBack(pngAbs: string): Promise<ReadCheck> {
 }
 const readIssues = (r?: ReadCheck) => (r ? [...r.missing.map((w) => `"${w}" can't be read on the render`), ...r.hardToRead.map((x) => `hard to read: ${x}`)] : []);
 
-// The image model, saving what it paints.
-let geminiModel: string | null = null;
-async function paint(what: string, file: string, text: string, images: Image[]): Promise<{ file: string } | { error: string }> {
-  const r = await paintSketch({ apiKey: geminiKey!, text, images, aspect: poster.aspect, model: geminiModel });
+// The image models, saving what they paint.
+const modelUsed: Partial<Record<Painter, string>> = {};
+async function paint(painter: Painter, what: string, file: string, text: string, images: Image[]): Promise<{ file: string; model: string } | { error: string }> {
+  const r = painter === "gemini"
+    ? await paintSketch({ apiKey: keys.gemini!, text, images, aspect: poster.aspect, model: modelUsed.gemini ?? null })
+    : await paintOpenAI({ apiKey: keys.openai!, text, images, aspect: poster.aspect, model: modelUsed.openai ?? null });
   if (!r.ok) {
-    if (r.billed && r.model) imageCalls.push({ what, model: r.model, usd: SKETCH.usdPerImage[r.model] ?? SKETCH_WORST_USD, seconds: 0 });
+    if (r.billed && r.model) imageCalls.push({ what, model: r.model, usd: painter === "gemini" ? (SKETCH.usdPerImage[r.model] ?? SKETCH_WORST_USD) : OPENAI_WORST_USD, seconds: 0 });
     return { error: r.error };
   }
-  geminiModel = r.model;
+  modelUsed[painter] = r.model;
   imageCalls.push({ what, model: r.model, usd: r.usd, seconds: r.seconds });
   const out = `posts/${file}.${r.mediaType.includes("png") ? "png" : "jpg"}`;
   writeFileSync(join(runDir, out), Buffer.from(r.base64, "base64"));
-  return { file: out };
+  return { file: out, model: r.model };
+}
+
+/** Where each slot of a composition sits, in percent of the canvas, for the painter. */
+async function zonesOf(c: Pick<Composition, "html" | "css">): Promise<string> {
+  const file = join(runDir, "posts", "b-zones.html");
+  writeFileSync(file, pageHtml(c, /data-slot=["']?photo/.test(c.html)));
+  const page = await browser.newPage({ viewport: { width: 1080, height: H } });
+  try {
+    await page.goto(pathToFileURL(file).href, { waitUntil: "load" });
+    await page.evaluate(() => document.fonts.ready);
+    const boxes = (await page.evaluate(`(() => { const P = document.querySelector('.post').getBoundingClientRect(); return [...document.querySelectorAll('[data-slot]')].map((e) => { const r = e.getBoundingClientRect(); return { slot: e.getAttribute('data-slot'), x0: (r.left - P.left) / P.width, x1: (r.right - P.left) / P.width, y0: (r.top - P.top) / P.height, y1: (r.bottom - P.top) / P.height }; }); })()`)) as { slot: string; x0: number; x1: number; y0: number; y1: number }[];
+    const pct = (n: number) => `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
+    const what: Record<string, string> = { wordmark: "the logo", photo: "the owner's photo, pasted in later as a print (paint a soft shadow and two strips of tape just outside its top corners)", headline: "the headline", subhead: "a line of text", date: "the date and time", details: "a line of small text" };
+    return boxes.map((b) => `- ${what[b.slot] ?? b.slot}: from ${pct(b.x0)} to ${pct(b.x1)} across, ${pct(b.y0)} to ${pct(b.y1)} down`).join("\n");
+  } finally {
+    await page.close();
+  }
 }
 
 const clock = async <T>(key: string, f: () => Promise<T>): Promise<T> => {
@@ -234,7 +260,7 @@ const clock = async <T>(key: string, f: () => Promise<T>): Promise<T> => {
 const usdSince = (n: number) => usage.slice(n).reduce((s, u) => s + u.usd, 0);
 const imgUsd = (prefix: string) => imageCalls.filter((c) => c.what.startsWith(prefix)).reduce((s, c) => s + c.usd, 0);
 
-console.log(`Poster spike ${runId}: ${BRAND} / ${poster.id}, ${refs.length} references, ${PLATE_TAKES} plate(s)${skipC ? ", no C" : ""}`);
+console.log(`Poster spike ${runId}: ${BRAND} / ${poster.id}, ${refs.length} references, painters ${painters.join(" + ")}, ${PLATE_TAKES} plate(s) each${skipC ? ", no C" : ""}`);
 const started = Date.now();
 const pool: Built[] = [];
 for (const [label, name, file] of [["today", "Today's Specs post", "todays-specs-post.png"], ["target", "Scott's target (image model)", "target-image-model.png"]] as const) {
@@ -249,8 +275,8 @@ const printKit = loadPrompt("print-kit", {}).system;
 const builds: Built[] = [];
 let artZones = "";
 let wireframe: string | null = null;
-const plates: ({ take: number; file: string } | { take: number; error: string })[] = [];
-let full: Built | null = null;
+const plates: ({ take: number; painter: Painter; file: string; model: string } | { take: number; painter: Painter; error: string })[] = [];
+const fulls: Built[] = [];
 let critique: ArtCritique | null = null;
 let winner: string | null = null;
 const blind: Record<string, string> = {};
@@ -259,13 +285,18 @@ try {
   // A and B's type layer run side by side; C's painting starts at the same time.
   const u0 = usage.length;
   const cJob = skipC
-    ? Promise.resolve(null)
-    : clock("C", async () => {
-        const p = loadPrompt("poster-full", { business_name: briefs.business_name, intent: poster.intent, canvas, copy, kit: fullKit });
-        const r = await paint("C", "c-full-poster", `${p.system}\n\n${p.user}`, [photoImg, logoImg, ...refImgs]);
-        if ("error" in r) return { label: "C", name: "C. Image model paints everything", png: null, errors: [r.error], probe: [], tries: 1 } as Built;
-        return { label: "C", name: "C. Image model paints everything", png: r.file, errors: [], probe: [], tries: 1 } as Built;
-      });
+    ? Promise.resolve([] as Built[])
+    : clock("C", () =>
+        Promise.all(
+          painters.map(async (painter) => {
+            const label = painters.length > 1 ? `C-${painter}` : "C";
+            const p = loadPrompt("poster-full", { business_name: briefs.business_name, intent: poster.intent, canvas, copy, kit: fullKit });
+            const r = await paint(painter, label, `c-full-poster-${painter}`, `${p.system}\n\n${p.user}`, [photoImg, logoImg, ...refImgs]);
+            const name = `${label}. Image model paints everything (${"error" in r ? painter : r.model})`;
+            return ("error" in r ? { label, name, png: null, errors: [r.error], probe: [], tries: 1 } : { label, name, png: r.file, errors: [], probe: [], tries: 1 }) as Built;
+          }),
+        ),
+      );
   const aJob = clock("A", () => compose({ label: "A", name: "A. HTML with references and print textures", appendix: printKit, images: baseImages }));
   const typeJob = clock("B-layout", () => compose({ label: "B-layout", name: "B. Type layer (before the plate)", appendix: `${printKit}\n\n${loadPrompt("plate-type", { fit: "Design the type layer for a painted plate." }).system}`, images: baseImages }));
   const [a, layer] = await Promise.all([aJob, typeJob]);
@@ -277,21 +308,28 @@ try {
 
   // B: wireframe, plates, fit.
   wireframe = (await render(layer.composition, "b-wireframe", { wireframe: true })).png;
-  const wireImg = jpeg(readFileSync(join(runDir, wireframe)).toString("base64"), "Image 1: the layout wireframe. Gray blocks are type, logo and photo; keep them calm.");
+  // The painter gets the layout in words, not the wireframe: shown gray blocks, it paints them.
+  const zones = await zonesOf(layer.composition);
   const notes = ["the brand's signature look, closest to the references", "bolder: larger illustration, a stronger color band, more worn print"];
   const bJob = clock("B", async () => {
-    for (let t = 1; t <= PLATE_TAKES; t++) {
-      const p = loadPrompt("plate", { business_name: briefs.business_name, intent: poster.intent, canvas, art_zones: artZones, kit: lookKit, take: String(t), take_note: notes[t - 1] ?? "a different idea from the other variations" });
-      const r = await paint(`B${t}`, `b-plate-${t}`, `${p.system}\n\n${p.user}`, [wireImg, ...refImgs.map((i, k) => ({ ...i, label: `Image ${k + 2}: reference poster ${k + 1}.` }))]);
-      plates.push({ take: t, ...r });
-      console.log("error" in r ? `  plate ${t} failed: ${r.error}` : `  plate ${t}: ${geminiModel}`);
-    }
+    let n = 0;
+    await Promise.all(
+      painters.map(async (painter) => {
+        for (let t = 1; t <= PLATE_TAKES; t++) {
+          const take = ++n;
+          const p = loadPrompt("plate", { business_name: briefs.business_name, intent: poster.intent, canvas, art_zones: artZones, zones, kit: lookKit, take: String(t), take_note: notes[t - 1] ?? "a different idea from the other variations" });
+          const r = await paint(painter, `B${take}`, `b-plate-${take}-${painter}`, `${p.system}\n\n${p.user}`, refImgs.map((i, k) => ({ ...i, label: `Image ${k + 1}: reference poster ${k + 1}.` })));
+          plates.push({ take, painter, ...r });
+          console.log("error" in r ? `  plate ${take} (${painter}) failed: ${r.error}` : `  plate ${take}: ${r.model}`);
+        }
+      }),
+    );
     const out: Built[] = [];
     await Promise.all(
-      plates.filter((p): p is { take: number; file: string } => "file" in p).map(async (p) => {
+      plates.filter((p): p is { take: number; painter: Painter; file: string; model: string } => "file" in p).map(async (p) => {
         const u = usage.length;
         const first = await render(layer.composition!, `b${p.take}-first`, { plate: p.file });
-        const before: Built = { ...layer, label: `B${p.take}`, name: `B${p.take}. Painted plate, real type`, png: first.png, probe: first.probe, plate: p.file };
+        const before: Built = { ...layer, label: `B${p.take}`, name: `B${p.take}. Painted plate (${p.model}), real type`, png: first.png, probe: first.probe, plate: p.file };
         before.readBack = await readBack(join(runDir, first.png));
         // Fit the type to the plate once, with both in view.
         const plateImg = jpeg(await small(join(runDir, p.file), 1200), `Image ${baseImages.length + 1}: the painted plate, alone.`);
@@ -301,7 +339,7 @@ try {
           ...issueText(before).map((x) => `- code: ${x}`),
           ...readIssues(before.readBack).map((x) => `- reading the render: ${x}`),
         ].join("\n");
-        const fitted = await compose({ label: `B${p.take}`, name: `B${p.take}. Painted plate, real type`, appendix: `${printKit}\n\n${loadPrompt("plate-type", { fit: "" }).system}`, images: [...baseImages, plateImg, renderImg], plate: p.file, fitNotes, from: before });
+        const fitted = await compose({ label: `B${p.take}`, name: `B${p.take}. Painted plate (${p.model}), real type`, appendix: `${printKit}\n\n${loadPrompt("plate-type", { fit: "" }).system}`, images: [...baseImages, plateImg, renderImg], plate: p.file, fitNotes, from: before });
         if (fitted.png && fitted.png !== before.png && !fitted.errors.length) fitted.readBack = await readBack(join(runDir, fitted.png));
         const score = (b: Built) => issueText(b).length + readIssues(b.readBack).length * 2 + (b.png ? 0 : 99);
         const keep = fitted.png && !fitted.errors.length && score(fitted) <= score(before) ? fitted : before;
@@ -314,17 +352,17 @@ try {
   const [bs, c] = await Promise.all([bJob, cJob]);
   builds.push(...bs);
   for (const b of bs) console.log(`  ${b.label}: ${issueText(b).length || readIssues(b.readBack).length ? `flagged: ${[...issueText(b), ...readIssues(b.readBack)].join("; ")}` : "passed the checks"}`);
-  if (c) {
-    if (c.png) c.readBack = await readBack(join(runDir, c.png));
-    full = c;
-    console.log(`  C: ${c.png ? `invented [${c.readBack?.invented.join(", ")}], missing [${c.readBack?.missing.join(", ")}], logo ${c.readBack?.logo}` : c.errors.join("; ")}`);
+  for (const x of c) {
+    if (x.png) x.readBack = await readBack(join(runDir, x.png));
+    fulls.push(x);
+    console.log(`  ${x.label}: ${x.png ? `invented [${x.readBack?.invented.join(", ")}], missing [${x.readBack?.missing.join(", ")}], logo ${x.readBack?.logo}` : x.errors.join("; ")}`);
   }
   a.readBack = a.png ? await readBack(join(runDir, a.png)) : undefined;
   a.usd = undefined;
   void u0;
 
   // Blind critique: today, the target, A, B1..n, C.
-  const judged = [...pool, ...builds.filter((b) => b.png), ...(full?.png ? [full] : [])];
+  const judged = [...pool, ...builds.filter((b) => b.png), ...fulls.filter((f) => f.png)];
   const order = judged.map((b) => ({ b, k: Math.random() })).sort((x, y) => x.k - y.k).map((x) => x.b);
   order.forEach((b, i) => (blind[String(i + 1)] = b.label));
   const candidates = order.map((_, i) => `Candidate ${i + 1} (image ${i + 1}).`).join("\n");
@@ -344,7 +382,7 @@ try {
   const claudeUsd = usage.reduce((s, u) => s + u.usd, 0);
   const imageUsd = imageCalls.reduce((s, c) => s + c.usd, 0);
   const seconds = Math.round((Date.now() - started) / 1000);
-  writeFileSync(join(runDir, "run.json"), JSON.stringify({ runId, brand: BRAND, poster, geminiModel, models: { compose_bold: STEPS.compose_bold, read_back: STEPS.read_back, art_critique: STEPS.art_critique }, artZones, wireframe, plates, builds, full, pool, critique, blind, winner, imageCalls, usage, timing, claudeUsd, imageUsd, seconds }, null, 2));
+  writeFileSync(join(runDir, "run.json"), JSON.stringify({ runId, brand: BRAND, poster, modelUsed, models: { compose_bold: STEPS.compose_bold, read_back: STEPS.read_back, art_critique: STEPS.art_critique }, artZones, wireframe, plates, builds, fulls, pool, critique, blind, winner, imageCalls, usage, timing, claudeUsd, imageUsd, seconds }, null, 2));
   writeFileSync(join(runDir, "index.html"), reviewPage({ claudeUsd, imageUsd, seconds }));
   const page = await browser.newPage({ viewport: { width: 1800, height: 1000 }, deviceScaleFactor: 1 });
   await page.goto(pathToFileURL(join(runDir, "index.html")).href, { waitUntil: "load" });
@@ -389,13 +427,13 @@ figcaption{font-size:12.5px;color:#333;margin-top:8px}.n,.meta{color:#666}.sc{fo
 </style></head><body><h1>Poster spike: painted plate, real type</h1>
 <p>Good Company Records &amp; CDs, "${esc(slots.headline)}". Three builds from one brief and ${refs.length} reference posters, judged blind beside today's Specs post and Scott's image-model target. Every poster's words were read back from the image. Run ${esc(runId)}.</p>
 <section><div class="sheet"><h2>The posters</h2><div class="row">
-  ${[...pool, ...builds, ...(full ? [full] : [])].map(tile).join("")}
+  ${[...pool, ...builds, ...fulls].map(tile).join("")}
 </div></div>
 ${critique ? `<p><b>Why the pick:</b> ${esc(critique.why)}</p>${critique.revision.length ? `<p><b>Revision notes:</b></p><ul>${critique.revision.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}` : ""}
 </section>
 <section><div class="sheet"><h2>How B was made: wireframe → painted plate → type on top</h2><div class="row">
   ${wireframe ? `<figure><img src="${wireframe}" alt=""><figcaption><b>Wireframe</b> from Claude's type layer</figcaption></figure>` : ""}
-  ${plates.map((p) => ("file" in p ? `<figure><img src="${p.file}" alt=""><figcaption><b>Plate ${p.take}</b> (image model, no text)</figcaption></figure>` : `<div class="none">Plate ${p.take} failed: ${esc(p.error)}</div>`)).join("")}
+  ${plates.map((p) => ("file" in p ? `<figure><img src="${p.file}" alt=""><figcaption><b>Plate ${p.take}</b> (${esc(p.model)}, no text)</figcaption></figure>` : `<div class="none">Plate ${p.take} failed: ${esc(p.error)}</div>`)).join("")}
   ${builds.filter((b) => b.label.startsWith("B")).map((b) => `<figure><img src="${b.png}" alt=""><figcaption><b>${esc(b.name)}</b></figcaption></figure>`).join("")}
 </div></div>
 <p class="meta"><b>Art zones:</b> ${esc(artZones)}</p>

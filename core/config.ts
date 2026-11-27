@@ -35,6 +35,16 @@ export const SKETCH = {
   takes: 3,
 } as const;
 
+// OpenAI's image models (Nov 27 poster spike only), key OPENAI_API_KEY in .env. The newest names
+// weren't certain when this was written (Nov 27, 2026: OpenAI's docs list a 2.5 and a 2.6
+// family), so the first name the account can use wins. Prices are GPT Image 1.5's high-quality
+// square rate from OpenAI's model page; the newer models' prices weren't listed. Check before relying on them.
+export const IMAGE_OPENAI = {
+  models: ["gpt-image-2.6", "gpt-image-2.5-sunburst", "gpt-image-2.5", "gpt-image-1.5", "gpt-image-1"],
+  quality: "high",
+  usdPerImage: { "gpt-image-2.6": 0.2, "gpt-image-2.5-sunburst": 0.2, "gpt-image-2.5": 0.2, "gpt-image-1.5": 0.133, "gpt-image-1": 0.167 } as Record<string, number>,
+} as const;
+
 // USD per million tokens, for the cost line on the review page. Check current pricing before relying on it.
 export const PRICES: Record<string, { input: number; output: number; cacheRead: number }> = {
   "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2 },
