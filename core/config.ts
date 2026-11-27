@@ -10,6 +10,7 @@ export const STEPS = {
   // with a larger CSS toolkit, and a creative director picks the strongest from the renders.
   directions: { model: "claude-sonnet-5-5", max_tokens: 6000, effort: "medium" },
   compose_bold: { model: "claude-sonnet-5-5", max_tokens: 20000, effort: "high" },
+  compose_print: { model: "claude-sonnet-5-5", max_tokens: 32000, effort: "high" }, // poster spike: print layouts with art zones run longer than posts
   art_critique: { model: "claude-sonnet-5-5", max_tokens: 6000, effort: "medium" },
   // Poster spike (Nov 27): reads every word an image model painted, to check it against the copy.
   read_back: { model: "claude-sonnet-5-5", max_tokens: 3000, effort: "low" },

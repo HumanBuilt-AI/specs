@@ -197,7 +197,7 @@ async function compose(o: { label: string; name: string; appendix: string; image
       logo: logoLine,
       feedback: sentBack,
     });
-    const out = await callStructured({ step: "compose_bold", system: `${p.system}\n\n${o.appendix}`, user: p.user, images: o.images, schema: ComposeSchema });
+    const out = await callStructured({ step: "compose_print", system: `${p.system}\n\n${o.appendix}`, user: p.user, images: o.images, schema: ComposeSchema });
     usage.push(out.usage);
     const usesPhoto = /data-slot=["']?photo/.test(out.data.html);
     // B must use the owner photo (run 2 type layer dropped it and nothing noticed).
@@ -423,7 +423,7 @@ try {
   const claudeUsd = usage.reduce((s, u) => s + u.usd, 0);
   const imageUsd = imageCalls.reduce((s, c) => s + c.usd, 0);
   const seconds = Math.round((Date.now() - started) / 1000);
-  writeFileSync(join(runDir, "run.json"), JSON.stringify({ runId, brand: BRAND, poster, modelUsed, models: { compose_bold: STEPS.compose_bold, read_back: STEPS.read_back, art_critique: STEPS.art_critique }, artZones, wireframe, plates, builds, fulls, pool, critique, blind, winner, imageCalls, usage, timing, claudeUsd, imageUsd, seconds }, null, 2));
+  writeFileSync(join(runDir, "run.json"), JSON.stringify({ runId, brand: BRAND, poster, modelUsed, models: { compose_print: STEPS.compose_print, read_back: STEPS.read_back, art_critique: STEPS.art_critique }, artZones, wireframe, plates, builds, fulls, pool, critique, blind, winner, imageCalls, usage, timing, claudeUsd, imageUsd, seconds }, null, 2));
   writeFileSync(join(runDir, "index.html"), reviewPage({ claudeUsd, imageUsd, seconds }));
   const page = await browser.newPage({ viewport: { width: 1800, height: 1000 }, deviceScaleFactor: 1 });
   await page.goto(pathToFileURL(join(runDir, "index.html")).href, { waitUntil: "load" });
