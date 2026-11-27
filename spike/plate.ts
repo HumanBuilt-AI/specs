@@ -53,6 +53,8 @@ if (!["gemini", "openai", "both"].includes(imageArg)) throw new Error("--image m
 const painters: Painter[] = imageArg === "both" ? ["gemini", "openai"] : [imageArg as Painter];
 const PLATE_TAKES = Number(argOf("--takes") ?? (painters.length > 1 ? 1 : 2));
 const skipC = args.includes("--skip-c");
+const skipA = args.includes("--skip-a");
+const C_TAKES = Number(argOf("--c-takes") ?? 1);
 const keys: Record<Painter, string | undefined> = { gemini: process.env.GEMINI_API_KEY, openai: process.env.OPENAI_API_KEY };
 for (const p of painters) if (!keys[p]) throw new Error(`${p === "gemini" ? "GEMINI_API_KEY" : "OPENAI_API_KEY"} is missing from .env.`);
 
@@ -151,10 +153,25 @@ async function render(c: Pick<Composition, "html" | "css">, name: string, opts: 
   const file = join(runDir, "posts", `${name}.html`);
   writeFileSync(file, html);
   let probe = relevantIssues(await shoot(file, file.replace(/\.html$/, ".png")), true);
+  if (!opts.wireframe) {
+    const share = await logoShare(file);
+    if (share < 0.2) probe.push({ slot: "wordmark", code: "small_type", problem: `the logo is ${Math.round(share * 100)}% of the canvas width; make it at least 20% (about 220px wide)` });
+  }
   // Over a painted plate the probe can't see the real ground (it reads CSS colors, not pixels),
   // so contrast and "on the photo" are checked by reading the render back instead.
   if (opts.plate) probe = probe.filter((i) => i.code !== "contrast" && i.code !== "on_photo");
   return { png: `posts/${name}.png`, probe };
+}
+
+/** How much of the canvas width the logo image takes. */
+async function logoShare(htmlFile: string): Promise<number> {
+  const page = await browser.newPage({ viewport: { width: 1080, height: H } });
+  try {
+    await page.goto(pathToFileURL(htmlFile).href, { waitUntil: "load" });
+    return (await page.evaluate(`(() => { const P = document.querySelector('.post').getBoundingClientRect(); const l = document.querySelector('[data-slot="wordmark"] img') || document.querySelector('[data-slot="wordmark"]'); return l ? l.getBoundingClientRect().width / P.width : 0; })()`)) as number;
+  } finally {
+    await page.close();
+  }
 }
 
 /** One compose call plus the code checks, up to two tries. */
@@ -180,7 +197,8 @@ async function compose(o: { label: string; name: string; appendix: string; image
     const out = await callStructured({ step: "compose_bold", system: `${p.system}\n\n${o.appendix}`, user: p.user, images: o.images, schema: ComposeSchema });
     usage.push(out.usage);
     const usesPhoto = /data-slot=["']?photo/.test(out.data.html);
-    const check = checkBold(out.data, slots, usesPhoto);
+    // B must use the owner photo (run 2 type layer dropped it and nothing noticed).
+    const check = checkBold(out.data, slots, o.label.startsWith("B") ? true : usesPhoto);
     b = { ...b, composition: out.data, errors: check.errors, probe: [], tries: n };
     if (!check.ok) continue;
     const r = await render(out.data, `${o.label.toLowerCase().replace(/\W+/g, "-")}-${n}`, { plate: o.plate });
@@ -247,7 +265,9 @@ async function zonesOf(c: Pick<Composition, "html" | "css">): Promise<string> {
     const boxes = (await page.evaluate(`(() => { const P = document.querySelector('.post').getBoundingClientRect(); return [...document.querySelectorAll('[data-slot]')].map((e) => { const r = e.getBoundingClientRect(); return { slot: e.getAttribute('data-slot'), x0: (r.left - P.left) / P.width, x1: (r.right - P.left) / P.width, y0: (r.top - P.top) / P.height, y1: (r.bottom - P.top) / P.height }; }); })()`)) as { slot: string; x0: number; x1: number; y0: number; y1: number }[];
     const pct = (n: number) => `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
     const what: Record<string, string> = { wordmark: "the logo", photo: "the owner's photo, pasted in later as a print (paint a soft shadow and two strips of tape just outside its top corners)", headline: "the headline", subhead: "a line of text", date: "the date and time", details: "a line of small text" };
-    return boxes.map((b) => `- ${what[b.slot] ?? b.slot}: from ${pct(b.x0)} to ${pct(b.x1)} across, ${pct(b.y0)} to ${pct(b.y1)} down`).join("\n");
+    // A margin around each area, so the art doesn't touch the type (run 2: holly ran into the headline).
+    const m = 0.04;
+    return boxes.map((b) => `- ${what[b.slot] ?? b.slot}: from ${pct(b.x0 - m)} to ${pct(b.x1 + m)} across, ${pct(b.y0 - m)} to ${pct(b.y1 + m)} down`).join("\n");
   } finally {
     await page.close();
   }
@@ -284,24 +304,29 @@ const blind: Record<string, string> = {};
 try {
   // A and B's type layer run side by side; C's painting starts at the same time.
   const u0 = usage.length;
+  const cNotes = ["the strongest single idea from the references", "a different hero: let the photo lead", "the boldest version: type and record at full scale"];
   const cJob = skipC
     ? Promise.resolve([] as Built[])
     : clock("C", () =>
         Promise.all(
-          painters.map(async (painter) => {
-            const label = painters.length > 1 ? `C-${painter}` : "C";
-            const p = loadPrompt("poster-full", { business_name: briefs.business_name, intent: poster.intent, canvas, copy, kit: fullKit });
-            const r = await paint(painter, label, `c-full-poster-${painter}`, `${p.system}\n\n${p.user}`, [photoImg, logoImg, ...refImgs]);
-            const name = `${label}. Image model paints everything (${"error" in r ? painter : r.model})`;
-            return ("error" in r ? { label, name, png: null, errors: [r.error], probe: [], tries: 1 } : { label, name, png: r.file, errors: [], probe: [], tries: 1 }) as Built;
-          }),
+          painters.flatMap((painter) =>
+            Array.from({ length: C_TAKES }, async (_, k) => {
+              const label = `C${C_TAKES > 1 ? k + 1 : ""}${painters.length > 1 ? `-${painter}` : ""}`;
+              const p = loadPrompt("poster-full", { business_name: briefs.business_name, intent: poster.intent, canvas, copy, kit: fullKit, direction: poster.direction ?? "", take_note: C_TAKES > 1 ? (cNotes[k] ?? "a different idea from the other takes") : "your best version" });
+              const r = await paint(painter, label, `c-full-poster-${painter}-${k + 1}`, `${p.system}\n\n${p.user}`, [photoImg, logoImg, ...refImgs]);
+              const name = `${label}. Image model paints everything (${"error" in r ? painter : r.model})`;
+              return ("error" in r ? { label, name, png: null, errors: [r.error], probe: [], tries: 1 } : { label, name, png: r.file, errors: [], probe: [], tries: 1 }) as Built;
+            }),
+          ),
         ),
       );
-  const aJob = clock("A", () => compose({ label: "A", name: "A. HTML with references and print textures", appendix: printKit, images: baseImages }));
+  const aJob = skipA ? Promise.resolve(null) : clock("A", () => compose({ label: "A", name: "A. HTML with references and print textures", appendix: printKit, images: baseImages }));
   const typeJob = clock("B-layout", () => compose({ label: "B-layout", name: "B. Type layer (before the plate)", appendix: `${printKit}\n\n${loadPrompt("plate-type", { fit: "Design the type layer for a painted plate." }).system}`, images: baseImages }));
   const [a, layer] = await Promise.all([aJob, typeJob]);
-  builds.push(a);
-  console.log(`  A: ${a.png && !issueText(a).length ? "passed the checks" : `flagged: ${issueText(a).join("; ")}`}`);
+  if (a) {
+    builds.push(a);
+    console.log(`  A: ${a.png && !issueText(a).length ? "passed the checks" : `flagged: ${issueText(a).join("; ")}`}`);
+  }
   if (!layer.composition || layer.errors.length) throw new Error(`The type layer failed the code checks: ${layer.errors.join("; ")}`);
   artZones = layer.composition.rationale.find((r) => /art/i.test(r.decision))?.choice ?? "Paper texture over the whole canvas; a record-shop illustration in the empty areas.";
   console.log(`  art zones: ${artZones}`);
@@ -357,9 +382,11 @@ try {
     fulls.push(x);
     console.log(`  ${x.label}: ${x.png ? `invented [${x.readBack?.invented.join(", ")}], missing [${x.readBack?.missing.join(", ")}], logo ${x.readBack?.logo}` : x.errors.join("; ")}`);
   }
-  a.readBack = a.png ? await readBack(join(runDir, a.png)) : undefined;
-  a.usd = undefined;
+  if (a?.png) a.readBack = await readBack(join(runDir, a.png));
   void u0;
+
+  const passed = (r?: ReadCheck) => !!r && !r.invented.length && !r.missing.length && r.logo === "same" && !r.hardToRead.length;
+  if (fulls.length) console.log(`  C passed the read-back ${fulls.filter((f) => passed(f.readBack)).length} of ${fulls.length} times`);
 
   // Blind critique: today, the target, A, B1..n, C.
   const judged = [...pool, ...builds.filter((b) => b.png), ...fulls.filter((f) => f.png)];
