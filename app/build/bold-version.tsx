@@ -191,7 +191,7 @@ export function BoldVersion(props: {
 }
 
 /** A post page scaled into a small card, in a frame with scripts off. */
-function Thumb({ html, aspect }: { html: string; aspect: "1:1" | "4:5" }) {
+export function Thumb({ html, aspect }: { html: string; aspect: "1:1" | "4:5" }) {
   const box = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.25);
   const h = aspect === "4:5" ? 1350 : 1080;
