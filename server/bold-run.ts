@@ -50,7 +50,7 @@ export async function runBold(deps: Deps, t: BoldTrigger, geminiKey: string | un
   }
 }
 
-type Inputs = {
+export type Inputs = {
   session: Session;
   post: PostRecord;
   kit: KitSource;
@@ -62,7 +62,7 @@ type Inputs = {
   chunks: ReturnType<typeof parseChunks>;
 };
 
-async function inputs(deps: Deps, t: BoldTrigger): Promise<Inputs> {
+export async function inputs(deps: Deps, t: { sessionId: string; postId: string }): Promise<Inputs> {
   const session = await loadSession(deps.kv, t.sessionId, deps.now());
   const post = session.posts[t.postId];
   if (!post?.written || !post.plan) throw new Error("The post isn't written.");
@@ -92,9 +92,9 @@ async function inputs(deps: Deps, t: BoldTrigger): Promise<Inputs> {
   };
 }
 
-const pick = (chunks: Inputs["chunks"], ids: string[]) => formatChunks(ids.flatMap((k) => (chunks.has(k) ? [chunks.get(k)!] : [])));
+export const pick = (chunks: Inputs["chunks"], ids: string[]) => formatChunks(ids.flatMap((k) => (chunks.has(k) ? [chunks.get(k)!] : [])));
 
-function copyOf(slots: Record<TextSlot, string | null>) {
+export function copyOf(slots: Record<TextSlot, string | null>) {
   return TEXT_SLOTS.filter((s) => slots[s]).map((s) => `${s}: "${asData(slots[s]!)}" (${slots[s]!.length} characters)`).join("\n");
 }
 

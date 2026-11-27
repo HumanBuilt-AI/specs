@@ -311,7 +311,7 @@ try {
           painters.flatMap((painter) =>
             Array.from({ length: C_TAKES }, async (_, k) => {
               const label = `C${C_TAKES > 1 ? k + 1 : ""}${painters.length > 1 ? `-${painter}` : ""}`;
-              const p = loadPrompt("poster-full", { business_name: briefs.business_name, intent: poster.intent, canvas, copy, kit: fullKit, direction: poster.direction ?? "", take_note: C_TAKES > 1 ? (cNotes[k] ?? "a different idea from the other takes") : "your best version" });
+              const p = loadPrompt("poster-full", { business_name: briefs.business_name, intent: poster.intent, canvas, copy, kit: fullKit, direction: poster.direction ?? "", images: ["1. The owner's photo.", "2. The brand's real logo.", ...refImgs.map((_, i) => `${i + 3}. Reference poster ${i + 1}.`)].join("\n"), take_note: C_TAKES > 1 ? (cNotes[k] ?? "a different idea from the other takes") : "your best version" });
               const r = await paint(painter, label, `c-full-poster-${painter}-${k + 1}`, `${p.system}\n\n${p.user}`, [photoImg, logoImg, ...refImgs]);
               const name = `${label}. Image model paints everything (${"error" in r ? painter : r.model})`;
               return ("error" in r ? { label, name, png: null, errors: [r.error], probe: [], tries: 1 } : { label, name, png: r.file, errors: [], probe: [], tries: 1 }) as Built;

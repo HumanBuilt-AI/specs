@@ -44,9 +44,10 @@ const FILLER = new Set(["&", "and", "a", "an", "the", "of", "at", "in", "on", "f
 
 /**
  * Judge a read-back against the copy the poster was given. `copy` is every text slot's value.
- * `photoGiven` is false when the poster has no owner photo to keep.
+ * `photoGiven` is false when the poster has no owner photo to keep; `logoGiven` false when there's no logo file to match.
  */
-export function judgePoster(read: PosterRead, copy: string[], opts: { photoGiven: boolean }): PosterVerdict {
+export function judgePoster(read: PosterRead, copy: string[], opts: { photoGiven: boolean; logoGiven?: boolean }): PosterVerdict {
+  const logoGiven = opts.logoGiven ?? true;
   const want = new Set(copy.flatMap(words));
   const logoWords = new Set(read.logo_text.flatMap(words));
   const got = read.text.flatMap(words);
@@ -66,9 +67,9 @@ export function judgePoster(read: PosterRead, copy: string[], opts: { photoGiven
     ...invented.map((w) => `"${w}" is painted but isn't in the copy`),
     ...missing.map((w) => `"${w}" from the copy is missing or misspelled`),
     ...hardToRead.map((x) => `hard to read on a phone: ${x}`),
-    ...(read.logo === "redrawn" ? [`the logo is redrawn instead of the brand's own mark (${read.logo_notes})`] : []),
-    ...(read.logo === "missing" ? ["the logo is missing"] : []),
-    ...(read.logo !== "missing" && read.logo_count > 1 ? [`the logo appears ${read.logo_count} times; it should appear once`] : []),
+    ...(logoGiven && read.logo === "redrawn" ? [`the logo is redrawn instead of the brand's own mark (${read.logo_notes})`] : []),
+    ...(logoGiven && read.logo === "missing" ? ["the logo is missing"] : []),
+    ...(logoGiven && read.logo !== "missing" && read.logo_count > 1 ? [`the logo appears ${read.logo_count} times; it should appear once`] : []),
     ...(opts.photoGiven && read.photo === "changed" ? [`the owner's photo is repainted or changed (${read.photo_notes}); keep it as given`] : []),
     ...(opts.photoGiven && read.photo === "missing" ? ["the owner's photo is missing"] : []),
   ];

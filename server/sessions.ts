@@ -64,6 +64,8 @@ export type Session = {
   regenerationsUsed: number;
   /** Bold passes taken (server/bold.ts); at most LIMITS.boldPerSession. */
   boldUsed?: number;
+  /** Posters made (server/poster.ts); at most LIMITS.postersPerSession. */
+  postersUsed?: number;
   uploads: UploadRecord[];
   posts: Record<string, PostRecord>;
   extraction?: ExtractionState;
