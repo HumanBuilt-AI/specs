@@ -137,3 +137,18 @@ test("a logo that would vanish on its background becomes a knockout; one that re
   const badge = [...Array(100).fill(pixel(PLUM))].flat();
   assert.equal(knockoutPixels(badge, PLUM, CREAM), false, "a logo with its own solid background shows as a badge");
 });
+
+test("notes name colors and fonts for the Colors and Fonts steps (Scott, Nov 27)", async () => {
+  const { notesPicks } = await import("../core/picks.ts");
+  const n = notesPicks(["ODDIO brand notes", "Palette: smoke #2b2b2b, bone #EFE8DC, dial orange #E4672C", "Heading font: Gotham Rounded Bold", "Body: Inter", "We make headphones."].join("\n"));
+  assert.deepEqual(n.hexes, ["#2B2B2B", "#EFE8DC", "#E4672C"]);
+  assert.equal(n.body, "Inter");
+  assert.deepEqual(n.unknownFonts, ["Gotham Rounded"]);
+  const g = notesPicks("Fonts: Plus Jakarta Sans for headings, Fraunces for body");
+  assert.equal(g.heading, "Plus Jakarta Sans");
+  assert.equal(g.body, "Fraunces");
+  assert.deepEqual(g.unknownFonts, []);
+  // Plain words aren't fonts.
+  assert.deepEqual(notesPicks("We play records and make good coffee.").unknownFonts, []);
+  assert.equal(notesPicks("We play records.").heading, null);
+});
