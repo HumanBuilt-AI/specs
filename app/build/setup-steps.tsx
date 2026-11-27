@@ -35,7 +35,7 @@ export function StepRail({ stage, reading }: { stage: SetupStage; reading?: { do
       </ol>
       {reading && reading.total > 0 && (
         <p className="muted small step-reading">
-          {reading.done < reading.total ? `Reading your photos in the background: ${reading.done} of ${reading.total}` : "Photos read"}
+          {reading.done < reading.total ? `Reading your files in the background: ${reading.done} of ${reading.total}` : "Files read"}
         </p>
       )}
     </div>
@@ -48,6 +48,8 @@ export function PhotosStep(props: {
   logo: File | null;
   photos: File[];
   heroes: number[];
+  url: string;
+  onUrl: (u: string) => void;
   busy: boolean;
   onLogo: (f: File | null) => void;
   onPhotos: (f: File[]) => void;
@@ -142,9 +144,13 @@ export function PhotosStep(props: {
       )}
       {photos.length > 0 && <p className="muted small">Star one or two photos to lead your posts. Specs uses the others to back them up.</p>}
 
+      <label htmlFor="url">Website, if you have one</label>
+      <input id="url" type="url" placeholder="https://" value={props.url} onChange={(e) => props.onUrl(e.target.value)} />
+      <p className="counter">A site takes the longest to read, so Specs starts on it now, while you pick colors and fonts.</p>
+
       <div className="step-actions">
         <button onClick={props.onNext} disabled={busy}>
-          {logo || photos.length ? "Next: colors" : "Skip: I have no photos"}
+          {logo || photos.length || props.url.trim() ? "Next: colors" : "Skip: I have no photos"}
         </button>
       </div>
     </div>

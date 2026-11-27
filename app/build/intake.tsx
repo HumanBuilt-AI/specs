@@ -15,7 +15,7 @@ import { boardFrom, previewSlots } from "../../core/preview.ts";
 import { buildPostPage } from "../../core/post-html.ts";
 import { call, sendForm } from "../lib/api.ts";
 import { LOGO_ACCEPT, logoProblem, prepareImage } from "../lib/images.ts";
-import { logoDataUrl } from "../lib/logo.ts";
+import { logoDataUrl, useLogoFor } from "../lib/logo.ts";
 import { RenderCall } from "../ui/render.tsx";
 import { ChatPanel, suggestionsFor } from "./chat-panel.tsx";
 import { Skeleton, ToastProvider, useToast } from "../ui/primitives.tsx";
@@ -394,6 +394,7 @@ function IntakeInner({ sessionId, chunks, onKitChanged }: { sessionId: string; c
 
 /** The kit's first post, rebuilt from the kit as it stands. No model call: the copy is the kit's own words. */
 function LivePost({ chunks, kit, photoUrls }: { chunks: IntakeChunks; kit: KitFiles | null; photoUrls: Record<string, string> }) {
+  const logoShown = useLogoFor(photoUrls.logo ?? null, kit?.tokensCss);
   const box = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.3);
   const [changed, setChanged] = useState(false);
@@ -413,7 +414,7 @@ function LivePost({ chunks, kit, photoUrls }: { chunks: IntakeChunks; kit: KitFi
     kit && slots && kit.templates["photo-led"]
       ? buildPostPage({
           templateHtml: kit.templates["photo-led"],
-          look: { tokensCss: kit.tokensCss, wordmarkLines: kit.wordmarkLines, logoSrc: photoUrls.logo ?? null, fontsHref: kit.fontsHref, base: { css: kit.baseCss } },
+          look: { tokensCss: kit.tokensCss, wordmarkLines: kit.wordmarkLines, logoSrc: logoShown, fontsHref: kit.fontsHref, base: { css: kit.baseCss } },
           slots: { headline: slots.headline, subhead: slots.subhead, badge: slots.badge },
           photoSrc,
         })
