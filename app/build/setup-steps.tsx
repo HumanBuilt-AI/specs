@@ -142,7 +142,12 @@ export function PhotosStep(props: {
           ))}
         </div>
       )}
-      {photos.length > 0 && <p className="muted small">Star one or two photos to lead your posts. Specs uses the others to back them up.</p>}
+      {photos.length > 0 && (
+        <p className="star-hint small">
+          <b>★ Star your best one or two.</b>
+          <span className="muted">Starred photos lead every post Specs makes, and Specs won&rsquo;t ask you about photos later. The rest back them up.</span>
+        </p>
+      )}
 
       <label htmlFor="url">Website, if you have one</label>
       <input id="url" type="url" placeholder="https://" value={props.url} onChange={(e) => props.onUrl(e.target.value)} />
@@ -172,7 +177,8 @@ export function ColorsStep(props: { sources: ColorSource[]; busy: boolean; onDon
   };
   const [slots, setSlots] = useState<Slot[]>(fresh);
   const [touched, setTouched] = useState(false);
-  const [active, setActive] = useState<PaletteRole>("background");
+  // The palette comes filled in. Tapping a color opens the other colors for that one role; picking one swaps it and closes (Scott, Nov 27: the pick-a-slot-then-tap step was confusing).
+  const [editing, setEditing] = useState<PaletteRole | null>(null);
   // New colors (a photo sampled late, hex codes pasted) refresh the suggestion until the owner changes it.
   useEffect(() => {
     if (!touched) setSlots(fresh());
@@ -180,11 +186,10 @@ export function ColorsStep(props: { sources: ColorSource[]; busy: boolean; onDon
 
   const get = (r: PaletteRole) => slots.find((s) => s.role === r)?.hex ?? null;
   const assign = (hex: string) => {
+    if (!editing) return;
     setTouched(true);
-    setSlots((ss) => ss.map((s) => (s.role === active ? { ...s, hex } : s)));
-    // Headlines usually follow the text color; the next empty slot is the natural next pick.
-    const i = PALETTE_ROLES.indexOf(active);
-    setActive(PALETTE_ROLES[Math.min(i + 1, PALETTE_ROLES.length - 1)]!);
+    setSlots((ss) => ss.map((s) => (s.role === editing ? { ...s, hex } : s)));
+    setEditing(null);
   };
   const bg = get("background") ?? "#F5F3EF";
   const text = get("text") ?? ink(bg);
@@ -200,40 +205,47 @@ export function ColorsStep(props: { sources: ColorSource[]; busy: boolean; onDon
       <h2 className="step-title">
         Your colors. <span>Most used first.</span>
       </h2>
-      <p className="muted">Pick a slot, then tap a color for it. These came from your logo first, then your photos, with near-duplicates merged.</p>
+      <p className="muted">{cands.length ? "Here's a palette from your logo and photos. Tap any color to swap it." : "Paste your hex codes below, or skip and Specs will use what your files say."}</p>
 
-      <div className="role-slots" role="radiogroup" aria-label="Color roles">
+      <div className="role-slots" aria-label="Your palette">
         {slots.map((s) => (
           <button
             key={s.role}
             type="button"
-            role="radio"
-            aria-checked={active === s.role}
-            className={`role-slot ${active === s.role ? "active" : ""} ${s.hex ? "" : "empty"}`}
-            onClick={() => setActive(s.role)}
+            aria-expanded={editing === s.role}
+            className={`role-slot ${editing === s.role ? "active" : ""} ${s.hex ? "" : "empty"}`}
+            onClick={() => setEditing(editing === s.role ? null : s.role)}
           >
             <span className="role-chip" style={s.hex ? { background: s.hex } : undefined} />
             <span className="role-name">{ROLE_TEXT[s.role].name}</span>
             <span className="muted small">{s.hex ?? ROLE_TEXT[s.role].hint}</span>
+            <span className="small role-action">{editing === s.role ? "Close" : s.hex ? "Swap" : "Add"}</span>
           </button>
         ))}
       </div>
-      {(extra || accent) && active === "extra" && extra && (
-        <button type="button" className="quiet" onClick={() => (setTouched(true), setSlots((ss) => ss.map((s) => (s.role === "extra" ? { ...s, hex: null } : s))))}>
-          Clear the extra color
-        </button>
-      )}
 
-      <div className="cand-grid" aria-label={`Colors for ${ROLE_TEXT[active].name}`}>
-        {cands.map((c: Candidate) => (
-          <button key={c.hex} type="button" className={`cand ${get(active) === c.hex ? "on" : ""}`} onClick={() => assign(c.hex)} aria-label={`${c.hex} from your ${c.from === "typed" ? "hex codes" : c.from}`}>
-            <span className="cand-chip" style={{ background: c.hex }} />
-            <span className="mono small">{c.hex}</span>
-            <span className="muted small">{c.from === "typed" ? "yours" : c.from}</span>
-          </button>
-        ))}
-        {!cands.length && <p className="muted small">No colors yet. Paste your hex codes below, or skip and Specs will use what your files say.</p>}
-      </div>
+      {editing && (
+        <div className="cand-panel">
+          <p className="small">
+            <b>{ROLE_TEXT[editing].name}:</b> pick one of your colors.
+          </p>
+          <div className="cand-grid" aria-label={`Colors for ${ROLE_TEXT[editing].name}`}>
+            {cands.map((c: Candidate) => (
+              <button key={c.hex} type="button" className={`cand ${get(editing) === c.hex ? "on" : ""}`} onClick={() => assign(c.hex)} aria-label={`${c.hex} from your ${c.from === "typed" ? "hex codes" : c.from}`}>
+                <span className="cand-chip" style={{ background: c.hex }} />
+                <span className="mono small">{c.hex}</span>
+                <span className="muted small">{c.from === "typed" ? "yours" : c.from}</span>
+              </button>
+            ))}
+            {!cands.length && <p className="muted small">No colors yet. Paste your hex codes below.</p>}
+          </div>
+          {editing === "extra" && extra && (
+            <button type="button" className="quiet" onClick={() => (setTouched(true), setSlots((ss) => ss.map((s) => (s.role === "extra" ? { ...s, hex: null } : s))), setEditing(null))}>
+              Remove the extra color
+            </button>
+          )}
+        </div>
+      )}
 
       <label htmlFor="hexes">Have exact colors? Paste hex codes</label>
       <input id="hexes" value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="#361E39, #BE3042, #F4EBDD" />

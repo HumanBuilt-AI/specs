@@ -3,8 +3,8 @@ import { CONTENT, DEMO_BRAND_IDS, type DemoBrandId } from "../server/generated/c
 import { tokenValues } from "../core/kit.ts";
 import { PageMotion, Shared } from "./ui/page-motion.tsx";
 
-// The start screen: pick a precomputed demo brand (free, instant) or build a kit from your own
-// materials. Each demo card is set in that brand's own colors and type, read from its tokens.css.
+// The start screen: build a kit from your own materials (first, Scott Nov 27), or look at a
+// precomputed demo brand (free, instant). Each demo card is set in that brand's own colors and type, read from its tokens.css.
 
 const STYLE: Record<DemoBrandId, string> = {
   "half-acre-club": "Warm and handmade",
@@ -83,8 +83,19 @@ export default function Home() {
         brand.
       </p>
 
+      <Link href="/build" className="card start-own start-own-lead">
+        <div>
+          <h2 className="start-own-title">Build your brand kit.</h2>
+          <p className="muted small">
+            Upload a logo, photos, a PDF or your About text. Watch the kit assemble with every item tagged to the upload it
+            came from, then answer a few questions about what&rsquo;s missing.
+          </p>
+        </div>
+        <span className="c-btn">Start →</span>
+      </Link>
+
       <h2>
-        Pick a demo brand <span>to see finished posts.</span>
+        Or look at a demo brand <span>first.</span>
       </h2>
       <p className="muted small">
         Each post shows why it works, and the same brief made with no kit. Free and instant: these were made ahead of time. The
@@ -95,20 +106,6 @@ export default function Home() {
           <DemoCard key={id} id={id} />
         ))}
       </div>
-
-      <h2>
-        Or start with yours.
-      </h2>
-      <Link href="/build" className="card start-own">
-        <div>
-          <h3>Build a brand kit from your own materials</h3>
-          <p className="muted small">
-            Upload a logo, photos, a PDF or your About text. Watch the kit assemble with every item tagged to the upload it
-            came from, then answer a few questions about what&rsquo;s missing.
-          </p>
-        </div>
-        <span className="mono small">Start →</span>
-      </Link>
 
       <p className="muted small start-links">
         Also here: <Link href="/kit">Specs&rsquo; own brand kit</Link>, the <Link href="/catalog">components</Link> the intake agent asks with, and the{" "}
