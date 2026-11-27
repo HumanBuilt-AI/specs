@@ -10,11 +10,12 @@ import { googleFamilies, googleFont, googleFontsHref } from "../../core/fonts.ts
 import { LIMITS } from "../../core/limits.ts";
 import { LOGO_ACCEPT, isSvg, logoProblem } from "../lib/images.ts";
 
-export type SetupStage = "photos" | "colors" | "fonts" | "words" | "built";
+export type SetupStage = "photos" | "colors" | "fonts" | "references" | "words" | "built";
 export const SETUP_STEPS: { id: Exclude<SetupStage, "built">; name: string }[] = [
   { id: "photos", name: "Photos" },
   { id: "colors", name: "Colors" },
   { id: "fonts", name: "Fonts" },
+  { id: "references", name: "References" },
   { id: "words", name: "Words" },
 ];
 

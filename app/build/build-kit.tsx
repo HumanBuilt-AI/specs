@@ -11,6 +11,7 @@ import { EXTRACT_CHUNKS, type ChunkDraft, type Conflicts, type Evidence } from "
 import type { Swatch } from "../../core/colors.ts";
 import { call, callPatiently, pool, sendForm, type ApiError } from "../lib/api.ts";
 import { prepareImage } from "../lib/images.ts";
+import { ReferencesStep } from "./references-step.tsx";
 import { ColorsStep, FontsStep, PhotosStep, StepRail, addFiles, sameFile, type SetupStage } from "./setup-steps.tsx";
 import { guessPurpose, type DocPurpose, type PaletteRole } from "../../core/picks.ts";
 import { Turnstile } from "../lib/turnstile.tsx";
@@ -304,7 +305,7 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
       const problems = await each([f], (x) => savePicks(sessionId, { fonts: x }));
       if (problems.length) return setError(problems.join(" "));
     }
-    setStage(sessionId, "words");
+    setStage(sessionId, "references");
   }
 
   /** The last step: the words go up, then everything is read and the kit is drafted. */
@@ -454,6 +455,7 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
           onDone={submitFonts}
         />
       )}
+      {sessionId && stage === "references" && <ReferencesStep sessionId={sessionId} onBack={() => setStage(sessionId, "fonts")} onDone={() => setStage(sessionId, "words")} />}
       {sessionId && stage === "words" && (
         <div className="card setup-step">
           <h2 className="step-title">
@@ -547,8 +549,8 @@ export default function BuildKit({ siteKey }: { siteKey: string }) {
             <button onClick={buildKit} aria-busy={!!busy} disabled={nothingChosen || tooLong || !!busy}>
               Build my kit
             </button>
-            <button className="c-btn ghost" onClick={() => setStage(sessionId, "fonts")} disabled={!!busy}>
-              Back to fonts
+            <button className="c-btn ghost" onClick={() => setStage(sessionId, "references")} disabled={!!busy}>
+              Back to references
             </button>
           </div>
         </div>

@@ -18,6 +18,7 @@ import { reserve, settle } from "./spend.ts";
 import { updateSession } from "./sessions.ts";
 import { inputs, pick, copyOf } from "./bold-run.ts";
 import { loadPosterJob, posterImageKey, posterPlateKey, updatePosterJob, type PosterAttempt, type PosterJob, type PosterTrigger } from "./poster.ts";
+import { referenceImages } from "./references.ts";
 import { OUTPUTS, canvasWords, keptWidth, type OutputFormat } from "../core/outputs.ts";
 
 /** The painter, swappable in tests. Real runs use paintOpenAI. */
@@ -56,8 +57,14 @@ async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint
   const kit = pick(x.chunks, ["positioning-core", "energy", "references", "layout-system", "visual-system", "art-direction", "social-rules", "guardrails"]);
   // The painter never sees the logo: code sets the owner's real file in the logo spot afterwards
   // (the browser composites it), so it can't come back misspelled or twice (Nov 27 speed run 2).
-  const images: Image[] = x.photo ? [x.photo] : [];
-  const imageList = [x.photo ? `1. The owner's photo. ${x.photoAlt}` : "None: no photo was given.", x.logo ? "The logo file is kept back for code to place." : "No logo file was given."].join("\n");
+  // The owner's reference images (a Cosmos board or their own picks) follow the photo.
+  const refs: Image[] = x.post.brand === "session" ? (await referenceImages(deps, x.session)).map((r, i) => ({ ...r, label: `Reference poster ${i + 1}.` })) : [];
+  const images: Image[] = [...(x.photo ? [x.photo] : []), ...refs];
+  const imageList = [
+    x.photo ? `1. The owner's photo. ${x.photoAlt}` : "No photo was given.",
+    ...refs.map((_, i) => `${i + (x.photo ? 2 : 1)}. Reference poster ${i + 1}: match its texture, print quality and type treatment, never its words, logos or people.`),
+    x.logo ? "The logo file is kept back for code to place." : "No logo file was given.",
+  ].join("\n");
   const spot = logoSpotWords(keptWidth(format));
 
   /** One take: paint, store, read back, judge. Returns the attempt (and keeps the verdict for a repaint). */

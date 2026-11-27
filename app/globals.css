@@ -497,3 +497,15 @@ main.kitpage .kitpage-lede { max-width: 42rem; }
 .bold-thumb[data-first-look] img { filter: saturate(0.9); }
 @media (max-width: 520px) { .output-thumb { height: 72px; } .output-choice { padding: var(--s2) 6px; } }
 @media (prefers-reduced-motion: reduce) { .output-choice, .output-thumb { transition: none; } .output-choice:hover { transform: none; } }
+
+/* References step */
+.ref-board { display: flex; gap: var(--s2); align-items: stretch; }
+.ref-board input { flex: 1; min-width: 0; margin: 0; }
+.ref-board button { margin: 0; white-space: nowrap; }
+.ref-thumb-wait { aspect-ratio: 1; background: var(--sunken); border-radius: var(--r-inner); }
+.ref-sliders { display: grid; gap: var(--s3); margin-top: var(--s5); }
+.ref-slider label { font-weight: 600; }
+.ref-slider-row { display: grid; grid-template-columns: 4.5em 1fr 4.5em; gap: var(--s2); align-items: center; }
+.ref-slider-row span:last-child { text-align: right; }
+.ref-slider-row input[type="range"] { width: 100%; accent-color: var(--ink); margin: 0; }
+@media (max-width: 520px) { .ref-board { flex-direction: column; } }
