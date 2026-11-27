@@ -13,6 +13,7 @@ import { logoRect } from "../../core/poster.ts";
 import { OUTPUTS, cropOf, type OutputFormat } from "../../core/outputs.ts";
 import { Working } from "../ui/working.tsx";
 import { Thumb } from "./bold-version.tsx";
+import { logoOnBackground } from "../lib/logo.ts";
 
 type Attempt = { n: number; quality?: "low" | "high"; pass: boolean; problems: string[]; model: string; seconds: number };
 export type PosterB = { html: string; css: string; usesPhoto: boolean; rationale: { decision: string; choice: string; reason: string; cites: string[] }[]; plateMediaType: string };
@@ -41,8 +42,13 @@ async function fetchDataUrl(path: string, body: unknown): Promise<string> {
   });
 }
 
-/** The painting trimmed to the output's shape, with the owner's real logo set in the logo spot (the painter leaves it as plain paper). */
-async function finish(painted: string, logo: string | null, format: OutputFormat): Promise<string> {
+/**
+ * The painting trimmed to the output's shape, with the owner's real logo set in the logo spot (the
+ * painter leaves it as plain paper). The logo is checked against the spot it actually lands on, not
+ * the kit's background: Scott's first live poster had a cream patch there, and the knockout made for
+ * the plum background turned the logo white on cream (Nov 27).
+ */
+async function finish(painted: string, logo: string | null, format: OutputFormat, look: { text: string | null; scale: number }): Promise<string> {
   try {
     const art = new Image();
     art.src = painted;
@@ -57,13 +63,31 @@ async function finish(painted: string, logo: string | null, format: OutputFormat
       const mark = new Image();
       mark.src = logo;
       await mark.decode();
-      const r = logoRect(c.w, c.h, mark.naturalWidth, mark.naturalHeight);
-      ctx.drawImage(mark, r.x, r.y, r.w, r.h);
+      const r = logoRect(c.w, c.h, mark.naturalWidth, mark.naturalHeight, look.scale);
+      const shown = await logoOnBackground(logo, spotColor(ctx, r), look.text);
+      const ink = new Image();
+      ink.src = shown;
+      await ink.decode();
+      ctx.drawImage(ink, r.x, r.y, r.w, r.h);
     }
     return canvas.toDataURL("image/png");
   } catch {
     return painted;
   }
+}
+
+/** The average color of the painting where the logo goes. */
+function spotColor(ctx: CanvasRenderingContext2D, r: { x: number; y: number; w: number; h: number }): string {
+  const px = ctx.getImageData(r.x, r.y, Math.max(1, r.w), Math.max(1, r.h)).data;
+  let red = 0, green = 0, blue = 0, n = 0;
+  for (let i = 0; i < px.length; i += 16) {
+    red += px[i]!;
+    green += px[i + 1]!;
+    blue += px[i + 2]!;
+    n++;
+  }
+  const hex = (v: number) => Math.round(v / Math.max(1, n)).toString(16).padStart(2, "0");
+  return `#${hex(red)}${hex(green)}${hex(blue)}`;
 }
 
 /** A full-size PNG of a page, for the backup version's download. */
@@ -98,14 +122,17 @@ export function PosterCard(props: {
   sessionId: string;
   postId: string;
   format: OutputFormat;
-  /** The owner's logo (already redrawn to read on the kit's background), set by code on the painting. */
+  /** The owner's logo as uploaded; code sets it on the painting, knocked out only if it would vanish on that spot. */
   logo: string | null;
+  /** The kit's text color (for a knockout) and the owner's logo size (1 = standard). */
+  look: { text: string | null; scale: number };
   /** Builds a full post page from the backup's type layer, with this post's copy, photo and kit look. */
   pageForB: (b: PosterB) => string;
   /** Called once the job has started (or the visit's outputs turn out to be used up). */
   onStart: () => void;
 }) {
-  const { sessionId, postId, format, logo, pageForB, onStart } = props;
+  const { sessionId, postId, format, logo, look, pageForB, onStart } = props;
+  const lookKey = `${look.text}|${look.scale}`;
   const aspect = "1:1" as const; // the backup is built for the square only
   const label = OUTPUTS[format].label.toLowerCase();
   const [job, setJob] = useState<Job | null>(null);
@@ -155,12 +182,13 @@ export function PosterCard(props: {
   // Trim each to the output's shape and set the real logo on it (again, if the logo arrives or changes later).
   useEffect(() => {
     let live = true;
-    if (painted) void finish(painted, logo, format).then((x) => live && setImage(x));
-    if (firstRaw) void finish(firstRaw, logo, format).then((x) => live && setFirst(x));
+    if (painted) void finish(painted, logo, format, look).then((x) => live && setImage(x));
+    if (firstRaw) void finish(firstRaw, logo, format, look).then((x) => live && setFirst(x));
     return () => {
       live = false;
     };
-  }, [painted, firstRaw, logo, format]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [painted, firstRaw, logo, format, lookKey]);
 
   // Start as soon as the card appears: the owner already chose the output.
   const [asked, setAsked] = useState(false);

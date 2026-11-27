@@ -42,6 +42,7 @@ type Made = {
   copy?: { slots: Record<TextSlot, string | null>; photo: { src: string; alt: string } | null };
 };
 
+const tokenHex = (css: string, name: string) => css.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`))?.[1] ?? null;
 const INTENT_LABEL: Record<PostIntent, string> = { promo: "Promo", announcement: "Announcement", event: "Event", testimonial: "Testimonial", tip: "Tip" };
 const messageOf = (e: unknown) => (isDropped(e) ? "The connection dropped before this came back. Try making it again." : e instanceof Error ? e.message : "Something went wrong.");
 
@@ -206,7 +207,8 @@ export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: st
                     sessionId={sessionId}
                     postId={m.id}
                     format={m.format}
-                    logo={logo}
+                    logo={logoRaw}
+                    look={{ text: tokenHex(kit.tokensCss, "color-text"), scale: Number(kit.tokensCss.match(/--logo-scale:\s*([\d.]+)/)?.[1] ?? 1) || 1 }}
                     onStart={() => setLeft((n) => Math.max(0, n - 1))}
                     pageForB={(b) =>
                       buildComposedPage({ composition: { html: b.html, css: b.css }, slots: m.copy!.slots, aspect: "1:1", tokensCss: kit.tokensCss, fontsHref: kit.fontsHref, wordmarkLines: kit.wordmarkLines, logoSrc: logo, photo: b.usesPhoto ? m.copy!.photo : null }).replace("</head>", `<style>${PRINT_TEXTURE_CSS}</style></head>`)
