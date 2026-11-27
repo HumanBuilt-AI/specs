@@ -25,7 +25,7 @@ import { loadChunks, formatChunks } from "./lib/kit.ts";
 import { loadPrompt } from "./lib/prompts.ts";
 import { callStructured, type Image, type Usage } from "./lib/claude.ts";
 import { paintOpenAI } from "../core/image-openai.ts";
-import { PosterReadSchema, judgePoster, type PosterVerdict } from "../core/poster.ts";
+import { PosterReadSchema, judgePoster, logoRect, logoSpotWords, type PosterVerdict } from "../core/poster.ts";
 
 const BRAND = "good-company";
 const SIZE = "1024x1536";
@@ -70,12 +70,31 @@ async function small(abs: string, max = 1400): Promise<string> {
   return buf.toString("base64");
 }
 const jpeg = (base64: string, label: string): Image => ({ mediaType: "image/jpeg", base64, label });
+async function withLogo(paintedB64: string): Promise<Buffer> {
+  const page = await browser.newPage({ viewport: { width: 1024, height: 1536 } });
+  const logoB64 = readFileSync(logoAbs).toString("base64");
+  const box = await page.evaluate(async ([a, l]) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${l}`;
+    await img.decode();
+    const art = new Image();
+    art.src = `data:image/png;base64,${a}`;
+    await art.decode();
+    return { w: art.naturalWidth, h: art.naturalHeight, lw: img.naturalWidth, lh: img.naturalHeight };
+  }, [paintedB64, logoB64] as const);
+  const r = logoRect(box.w, box.h, box.lw, box.lh);
+  await page.setViewportSize({ width: box.w, height: box.h });
+  await page.setContent(`<body style="margin:0"><div style="position:relative;width:${box.w}px;height:${box.h}px"><img src="data:image/png;base64,${paintedB64}" style="display:block;width:100%;height:100%"><img src="data:image/png;base64,${logoB64}" style="position:absolute;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px"></div>`);
+  const buf = await page.screenshot({ type: "png", clip: { x: 0, y: 0, width: box.w, height: box.h } });
+  await page.close();
+  return buf;
+}
 const photoImg = jpeg(await small(photoAbs), "Image 1: the owner's photo.");
 const logoImg: Image = { mediaType: "image/png", base64: readFileSync(logoAbs).toString("base64"), label: "Image 2: the brand's real logo." };
 const refImgs: Image[] = [];
-for (const [i, r] of refs.entries()) refImgs.push(jpeg(await small(join(brandDir(BRAND), r.file)), `Image ${i + 3}: reference poster ${i + 1}. ${r.borrow}`));
+for (const [i, r] of refs.entries()) refImgs.push(jpeg(await small(join(brandDir(BRAND), r.file)), `Image ${i + 2}: reference poster ${i + 1}. ${r.borrow}`));
 
-const p = loadPrompt("poster-full", { business_name: briefs.business_name, intent: poster.intent, canvas, copy, kit: fullKit, direction: poster.direction ?? "", images: ["1. The owner's photo.", "2. The brand's real logo.", ...refImgs.map((_, i) => `${i + 3}. Reference poster ${i + 1}.`)].join("\n"), take_note: "your best version" });
+const p = loadPrompt("poster-full", { business_name: briefs.business_name, intent: poster.intent, canvas, copy, kit: fullKit, direction: poster.direction ?? "", images: ["1. The owner's photo.", ...refImgs.map((_, i) => `${i + 2}. Reference poster ${i + 1}.`), "The logo file is kept back for code to place."].join("\n"), take_note: "your best version", logo_spot: logoSpotWords() });
 const text = `${p.system}\n\n${p.user}`;
 
 type Job = { label: string; quality: "low" | "medium" | "high"; stream?: boolean };
@@ -88,11 +107,11 @@ const jobs: Job[] = (TAKES ?? DEFAULT_TAKES).map((label) => {
 type Result = { label: string; quality: string; model?: string; paintS?: number; firstPartialS?: number; partials: string[]; events?: string[]; file?: string; readS?: number; doneS?: number; verdict?: PosterVerdict; error?: string };
 
 async function readBack(pngAbs: string): Promise<PosterVerdict> {
-  const rp = loadPrompt("read-back", { copy: copyText, photo_line: "The owner's photo is the third." });
+  const rp = loadPrompt("read-back", { copy: copyText, photo_line: "The owner's photo is the third.", logo_line: `The logo spot is ${logoSpotWords()}. The real logo goes there later, so the painting should have none.` });
   const images = [jpeg(await small(pngAbs, 1200), "Image 1: the poster."), { ...logoImg, label: "Image 2: the brand's real logo." }, { ...photoImg, label: "Image 3: the owner's photo." }];
   const out = await callStructured({ step: "read_back", ...rp, images, schema: PosterReadSchema });
   usage.push(out.usage);
-  return judgePoster(out.data, copyList, { photoGiven: true });
+  return judgePoster(out.data, copyList, { photoGiven: true, logoByCode: true });
 }
 
 const t0 = Date.now();
@@ -101,7 +120,7 @@ console.log(`Painting ${jobs.length} takes ${SERIAL ? "one after another" : "at 
 const runJob = async (j: Job): Promise<Result> => {
     const r: Result = { label: j.label, quality: j.quality, partials: [] };
     const paint = await paintOpenAI({
-      apiKey: KEY, text, images: [photoImg, logoImg, ...refImgs], aspect: "4:5", model: MODEL, size: SIZE, quality: j.quality,
+      apiKey: KEY, text, images: [photoImg, ...refImgs], aspect: "4:5", model: MODEL, size: SIZE, quality: j.quality,
       ...(j.stream ? { partials: 2, onEvent: (type: string, s: number) => (r.events ??= []).push(`${type} at ${s.toFixed(1)} s`), onPartial: (x: { index: number; base64: string; seconds: number }) => {
         r.firstPartialS ??= Math.round(x.seconds * 10) / 10;
         const f = `${j.label}-partial-${x.index}.png`;
@@ -114,6 +133,8 @@ const runJob = async (j: Job): Promise<Result> => {
     r.paintS = paint.seconds;
     r.file = `${j.label}.png`;
     writeFileSync(join(runDir, r.file), Buffer.from(paint.base64, "base64"));
+    // The review page shows what the owner gets: the painting with the real logo set in the logo spot, as the app does.
+    writeFileSync(join(runDir, `${j.label}-with-logo.png`), await withLogo(paint.base64));
     const rs = Date.now();
     try {
       r.verdict = await readBack(join(runDir, r.file));
@@ -152,7 +173,7 @@ writeFileSync(
 <h1>Speed spike · Good Company · ${SIZE}</h1>
 <p>Model ${esc(summary.model ?? "?")} · all takes painted at once · wall time ${summary.wallSeconds} s · first preview ${summary.firstPreviewSeconds ?? "none"} s · medium takes passed ${summary.threeMediumTakes.passed} of ${summary.threeMediumTakes.of}, first pass done at ${summary.threeMediumTakes.firstPassDoneSeconds ?? "never"} s · read-backs $${summary.claudeUsd}</p>
 <div class="g">${results
-    .map((r) => `<div class="c"><h3>${esc(r.label)}</h3>${r.file ? `<img src="${r.file}">` : ""}<p>painted ${r.paintS ?? "?"} s · read ${r.readS ?? "?"} s · done at ${r.doneS ?? "?"} s${r.firstPartialS ? ` · first preview ${r.firstPartialS} s` : ""}</p><p class="${r.verdict?.pass ? "pass" : "fail"}">${r.error ? esc(r.error) : r.verdict?.pass ? "Passed every check" : esc((r.verdict?.problems ?? []).join("; "))}</p>${r.partials.map((x) => `<p class="small">${esc(x)}</p><img src="${x.split(" ")[0]}">`).join("")}</div>`)
+    .map((r) => `<div class="c"><h3>${esc(r.label)}</h3>${r.file ? `<img src="${r.label}-with-logo.png">` : ""}<p>painted ${r.paintS ?? "?"} s · read ${r.readS ?? "?"} s · done at ${r.doneS ?? "?"} s${r.firstPartialS ? ` · first preview ${r.firstPartialS} s` : ""}</p><p class="${r.verdict?.pass ? "pass" : "fail"}">${r.error ? esc(r.error) : r.verdict?.pass ? "Passed every check" : esc((r.verdict?.problems ?? []).join("; "))}</p>${r.partials.map((x) => `<p class="small">${esc(x)}</p><img src="${x.split(" ")[0]}">`).join("")}</div>`)
     .join("")}</div>`,
 );
 console.log(`\nWall time ${summary.wallSeconds} s. First preview ${summary.firstPreviewSeconds ?? "none"} s. Medium takes passed ${summary.threeMediumTakes.passed}/${summary.threeMediumTakes.of}; first pass done at ${summary.threeMediumTakes.firstPassDoneSeconds ?? "never"} s.`);

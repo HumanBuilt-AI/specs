@@ -216,7 +216,7 @@ async function compose(o: { label: string; name: string; appendix: string; image
 // Reading every word back from a render: the shared check in core/poster.ts.
 type ReadCheck = PosterVerdict & { logoNotes: string; raw: string[] };
 async function readBack(pngAbs: string, withPhoto = false): Promise<ReadCheck> {
-  const p = loadPrompt("read-back", { copy: copyText, photo_line: withPhoto ? "The owner's photo is the third." : "No owner photo is given." });
+  const p = loadPrompt("read-back", { copy: copyText, photo_line: withPhoto ? "The owner's photo is the third." : "No owner photo is given.", logo_line: "No logo spot: the logo is painted." });
   const images = [jpeg(await small(pngAbs, 1200), "Image 1: the poster."), { ...logoImg, label: "Image 2: the brand's real logo." }, ...(withPhoto ? [{ ...photoImg, label: "Image 3: the owner's photo." }] : [])];
   const out = await callStructured({ step: "read_back", ...p, images, schema: PosterReadSchema });
   usage.push(out.usage);
@@ -311,7 +311,7 @@ try {
           painters.flatMap((painter) =>
             Array.from({ length: C_TAKES }, async (_, k) => {
               const label = `C${C_TAKES > 1 ? k + 1 : ""}${painters.length > 1 ? `-${painter}` : ""}`;
-              const p = loadPrompt("poster-full", { business_name: briefs.business_name, intent: poster.intent, canvas, copy, kit: fullKit, direction: poster.direction ?? "", images: ["1. The owner's photo.", "2. The brand's real logo.", ...refImgs.map((_, i) => `${i + 3}. Reference poster ${i + 1}.`)].join("\n"), take_note: C_TAKES > 1 ? (cNotes[k] ?? "a different idea from the other takes") : "your best version" });
+              const p = loadPrompt("poster-full", { business_name: briefs.business_name, intent: poster.intent, canvas, copy, kit: fullKit, direction: poster.direction ?? "", images: ["1. The owner's photo.", "2. The brand's real logo.", ...refImgs.map((_, i) => `${i + 3}. Reference poster ${i + 1}.`)].join("\n"), take_note: C_TAKES > 1 ? (cNotes[k] ?? "a different idea from the other takes") : "your best version", logo_spot: "none: this spike paints the logo itself, from the second image" });
               const r = await paint(painter, label, `c-full-poster-${painter}-${k + 1}`, `${p.system}\n\n${p.user}`, [photoImg, logoImg, ...refImgs]);
               const name = `${label}. Image model paints everything (${"error" in r ? painter : r.model})`;
               return ("error" in r ? { label, name, png: null, errors: [r.error], probe: [], tries: 1 } : { label, name, png: r.file, errors: [], probe: [], tries: 1 }) as Built;

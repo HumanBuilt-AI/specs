@@ -2,7 +2,7 @@
 // step may take minutes. It first checks the job's token and claims the run, so a stray or
 // repeated trigger (Netlify retries a failed background run) does nothing and spends nothing.
 //
-// Paint (prompts/poster-full.md, the OpenAI image model) → read back (prompts/read-back.md, Claude)
+// Paint (prompts/poster-full.md, the OpenAI image model; the logo spot left as plain paper) → read back (prompts/read-back.md, Claude)
 // → judge in code (core/poster.ts). A failed check gets one repaint told what failed; a second
 // fail ends in "fallback". Nothing the checks haven't passed is ever served.
 import "server-only";
@@ -10,7 +10,7 @@ import { LIMITS } from "../core/limits.ts";
 import { ComposeSchema, TEXT_SLOTS, type Composition } from "../core/compose.ts";
 import { checkBold, fillEchoes } from "../core/bold.ts";
 import { asData, fillPrompt } from "../core/prompts.ts";
-import { PosterReadSchema, judgePoster, repaintNote, type PosterVerdict } from "../core/poster.ts";
+import { PosterReadSchema, judgePoster, logoSpotWords, repaintNote, type PosterVerdict } from "../core/poster.ts";
 import { paintOpenAI, OPENAI_WORST_USD } from "../core/image-openai.ts";
 import type { Image } from "../core/claude.ts";
 import { CONTENT } from "./generated/content.ts";
@@ -54,11 +54,11 @@ async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint
   const copy = copyOf(x.slots);
   const copyList = TEXT_SLOTS.flatMap((s) => (x.slots[s] ? [x.slots[s]!] : []));
   const kit = pick(x.chunks, ["positioning-core", "energy", "layout-system", "visual-system", "art-direction", "social-rules", "guardrails"]);
-  const images: Image[] = [...(x.photo ? [x.photo] : []), ...(x.logo ? [x.logo] : [])];
-  const imageList = [
-    ...(x.photo ? [`${1}. The owner's photo. ${x.photoAlt}`] : []),
-    ...(x.logo ? [`${x.photo ? 2 : 1}. The brand's real logo.`] : []),
-  ].join("\n") || "None: no photo or logo was given. Set the business name in the heading font where the logo would go.";
+  // The painter never sees the logo: code sets the owner's real file in the logo spot afterwards
+  // (the browser composites it), so it can't come back misspelled or twice (Nov 27 speed run 2).
+  const images: Image[] = x.photo ? [x.photo] : [];
+  const imageList = [x.photo ? `1. The owner's photo. ${x.photoAlt}` : "None: no photo was given.", x.logo ? "The logo file is kept back for code to place." : "No logo file was given."].join("\n");
+  const spot = logoSpotWords();
 
   let verdict: PosterVerdict | null = null;
   for (let n = 1; n <= LIMITS.posterPaints; n++) {
@@ -72,6 +72,7 @@ async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint
       direction: `A printed poster for this post. Its goal: ${asData(x.post.brief.goal)}`,
       kit,
       take_note: verdict ? repaintNote(verdict) : "your best version",
+      logo_spot: spot,
     });
     const reservation = await reserve(deps.kv, deps.settings, deps.now(), OPENAI_WORST_USD);
     const r = await paint({ apiKey, text: `${filled.system}\n\n${filled.user}`, images, aspect: x.aspect, timeoutMs: 240_000 });
@@ -81,7 +82,11 @@ async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint
     await deps.kv.putBytes(posterImageKey(t.sessionId, t.postId, n), bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, { attempt: n, mediaType: r.mediaType });
 
     await set((j) => ({ ...j, status: "checking", stage: "Reading every word back" }));
-    const rb = fillPrompt("read-back", CONTENT.prompts["read-back"], { copy, photo_line: x.photo ? "The owner's photo is the third." : "No owner photo is given." });
+    const rb = fillPrompt("read-back", CONTENT.prompts["read-back"], {
+      copy,
+      photo_line: x.photo ? "The owner's photo is the third." : "No owner photo is given.",
+      logo_line: x.logo ? `The logo spot is ${spot}. The real logo goes there later, so the painting should have none.` : "No logo spot: the business name is painted where the logo would go.",
+    });
     const poster: Image = { mediaType: r.mediaType as Image["mediaType"], base64: r.base64, label: "Image 1: the poster." };
     const checkImages: Image[] = [
       poster,
@@ -89,7 +94,7 @@ async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint
       ...(x.photo ? [{ ...x.photo, label: "Image 3: the owner's photo." }] : []),
     ];
     const read = await guardedCall(deps, "read_back", { ...rb, images: checkImages }, PosterReadSchema);
-    verdict = judgePoster(read.data, copyList, { photoGiven: Boolean(x.photo), logoGiven: Boolean(x.logo) });
+    verdict = judgePoster(read.data, copyList, { photoGiven: Boolean(x.photo), logoGiven: Boolean(x.logo), logoByCode: Boolean(x.logo) });
     const attempt = { n, pass: verdict.pass, problems: verdict.problems.slice(0, 12).map((p) => p.slice(0, 300)), model: r.model, seconds: r.seconds };
     if (verdict.pass) {
       await set((j) => ({ ...j, status: "done", stage: "Done", attempts: [...j.attempts, attempt], result: { attempt: n, mediaType: r.mediaType } }));

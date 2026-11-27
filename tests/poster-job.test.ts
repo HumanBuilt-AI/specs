@@ -29,7 +29,7 @@ async function setup(opts: { reads?: ((copy: string[]) => Partial<PosterRead>)[]
     if (o.step === "read_back") {
       const copy = copyFrom(o.user);
       const tweak = opts.reads?.[reads++]?.(copy) ?? {};
-      const data: PosterRead = { text: copy, photo_text: [], logo_text: [], logo: "same", logo_count: 1, logo_notes: "", photo: (o.images?.length ?? 0) === 3 ? "same" : "none_given", photo_notes: "", hard_to_read: [], ...tweak };
+      const data: PosterRead = { text: copy, photo_text: [], logo_text: [], logo: "missing", logo_count: 0, logo_notes: "", logo_spot_clear: true, photo: (o.images?.length ?? 0) === 3 ? "same" : "none_given", photo_notes: "", hard_to_read: [], ...tweak };
       return { data: data as never, usage: { step: o.step, model: "claude-sonnet-5-5", input: 1, output: 1, cacheRead: 0, cacheWrite: 0, usd: 0.02 } };
     }
     if (o.step === "compose_print") return { data: { ...COMPOSED, rationale: [...COMPOSED.rationale, { decision: "art zones", choice: "A big record lower right.", reason: "Room for type top left.", cites: [] }] } as never, usage: { step: o.step, model: "claude-sonnet-5-5", input: 1, output: 1, cacheRead: 0, cacheWrite: 0, usd: 0.1 } };
@@ -65,7 +65,9 @@ test("a poster that passes the read-back is done on the first paint, and only it
   assert.deepEqual((job.attempts as { pass: boolean }[]).map((a) => a.pass), [true]);
   assert.equal(steps.filter((s) => s === "read_back").length, 1);
   assert.equal(paintPrompts.length, 1);
-  assert.match(paintPrompts[0]!, /The brand's real logo/);
+  // The painter never gets the logo: code sets the real file in the logo spot afterwards.
+  assert.match(paintPrompts[0]!, /The logo file is kept back for code to place/);
+  assert.match(paintPrompts[0]!, /The logo spot: the top-left corner/);
   assert.match(paintPrompts[0]!, /This take: your best version/);
   const img = await run(() => posterImage(jsonReq("/api/posters/image", { sessionId, postId }), deps));
   assert.equal(img.status, 200);
