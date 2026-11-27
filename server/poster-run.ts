@@ -9,7 +9,7 @@ import "server-only";
 import { ComposeSchema, TEXT_SLOTS, type Composition } from "../core/compose.ts";
 import { checkBold, fillEchoes } from "../core/bold.ts";
 import { asData, fillPrompt } from "../core/prompts.ts";
-import { PosterReadSchema, judgePoster, logoSpotWords, repaintNote, type PosterVerdict } from "../core/poster.ts";
+import { PosterReadSchema, judgePoster, logoSpotWords, repaintNote, repairReport, type PosterVerdict } from "../core/poster.ts";
 import { paintOpenAI, OPENAI_WORST_USD } from "../core/image-openai.ts";
 import type { Image } from "../core/claude.ts";
 import { CONTENT } from "./generated/content.ts";
@@ -68,12 +68,13 @@ async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint
   const spot = logoSpotWords(keptWidth(format));
 
   /** One take: paint, store, read back, judge. Returns the attempt (and keeps the verdict for a repaint). */
-  const take = async (n: number, quality: "low" | "high", note: string) => {
+  const take = async (n: number, quality: "low" | "high", note: string, repairing?: { painting: Image; problems: string[] }) => {
+    const list = repairing ? `${imageList}\n${images.length + 1}. The last painting, which missed the checks in the take note: keep it, and change only what's listed.` : imageList;
     const filled = fillPrompt("poster-full", CONTENT.prompts["poster-full"], {
       business_name: business,
       intent: x.post.intent,
       canvas: canvasWords(format),
-      images: imageList,
+      images: list,
       copy,
       direction: `A printed ${OUTPUTS[format].label.toLowerCase()} for this brief. Its goal: ${asData(x.post.brief.goal)}`,
       kit,
@@ -81,7 +82,7 @@ async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint
       logo_spot: spot,
     });
     const reservation = await reserve(deps.kv, deps.settings, deps.now(), OPENAI_WORST_USD);
-    const r = await paint({ apiKey, text: `${filled.system}\n\n${filled.user}`, images, aspect: format === "square" ? "1:1" : "4:5", size: OUTPUTS[format].size, quality, timeoutMs: 240_000 });
+    const r = await paint({ apiKey, text: `${filled.system}\n\n${filled.user}`, images: repairing ? [...images, repairing.painting] : images, aspect: format === "square" ? "1:1" : "4:5", size: OUTPUTS[format].size, quality, timeoutMs: 240_000 });
     await settle(deps.kv, reservation, r.ok ? r.usd : r.billed ? OPENAI_WORST_USD : 0);
     if (!r.ok) throw new Error(`The image model didn't paint the ${OUTPUTS[format].label.toLowerCase()}: ${r.error}`);
     const bytes = Buffer.from(r.base64, "base64");
@@ -100,7 +101,8 @@ async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint
     ];
     const read = await guardedCall(deps, "read_back", { ...rb, images: checkImages }, PosterReadSchema);
     const verdict = judgePoster(read.data, copyList, { photoGiven: Boolean(x.photo), logoGiven: Boolean(x.logo), logoByCode: Boolean(x.logo) });
-    const attempt: PosterAttempt = { n, quality, pass: verdict.pass, problems: verdict.problems.slice(0, 12).map((p) => p.slice(0, 300)), model: r.model, seconds: r.seconds };
+    const problems = verdict.problems.slice(0, 12).map((p) => p.slice(0, 300));
+    const attempt: PosterAttempt = { n, quality, pass: verdict.pass, problems, ...(repairing ? { repair: repairReport(repairing.problems, problems) } : {}), model: r.model, seconds: r.seconds };
     const media = r.mediaType;
     // A first look that passed is shown while the final is still painting; the final replaces it.
     await set((j) => ({
@@ -109,7 +111,7 @@ async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint
       ...(verdict.pass && quality === "low" && j.status !== "done" ? { firstLook: { attempt: n, mediaType: media } } : {}),
       stage: j.status === "done" ? j.stage : quality === "low" ? "Painting the final version" : "Checking the final version",
     }));
-    return { attempt, verdict, mediaType: media };
+    return { attempt, verdict, mediaType: media, painting: { ...poster, label: "The last painting." } };
   };
 
   // The quick take (about 20 s) and the final (about 35 s) paint side by side (Nov 27 speed run 2:
@@ -124,7 +126,8 @@ async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint
   // The final missed a check: one repaint told what failed. The first look stays up meanwhile.
   const missed = final.status === "fulfilled" ? final.value.verdict : null;
   await set((j) => ({ ...j, status: "painting", stage: "Repainting what didn't pass" }));
-  const again = await take(3, "high", missed ? repaintNote(missed) : "your best version").catch(() => null);
+  const repairing = final.status === "fulfilled" ? { painting: final.value.painting, problems: final.value.attempt.problems } : undefined;
+  const again = await take(3, "high", missed ? repaintNote(missed) : "your best version", repairing).catch(() => null);
   if (again?.verdict.pass) {
     await set((j) => ({ ...j, status: "done", stage: "Done", result: { attempt: 3, mediaType: again.mediaType } }));
     return;

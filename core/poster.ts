@@ -126,8 +126,15 @@ export function judgePoster(read: PosterRead, copy: string[], opts: { photoGiven
 
 /** What a repaint is told: the problems, and that everything else should stay. */
 export function repaintNote(v: PosterVerdict): string {
+  // Scott's anti-slop rules (Nov 27): fix only what a check proved, with the smallest change, and
+  // keep everything else (the last painting is attached for that). This is the only repair cycle.
   return [
-    "The last painting failed these checks. Fix them and keep everything else about the design:",
+    "The last painting failed these checks. The last painting is attached as the final image. Make the smallest change that fixes each one, and keep everything else exactly as it was: the layout, the colors, the type, the art and the photo. Don't restyle or redesign anything that wasn't listed:",
     ...v.problems.map((p) => `- ${p}`),
   ].join("\n");
+}
+
+/** What a repair did, compared with the painting it repaired: the problems it fixed, the ones it didn't, and any it caused. */
+export function repairReport(before: string[], after: string[]): { fixed: string[]; unresolved: string[]; introduced: string[] } {
+  return { fixed: before.filter((p) => !after.includes(p)), unresolved: before.filter((p) => after.includes(p)), introduced: after.filter((p) => !before.includes(p)) };
 }

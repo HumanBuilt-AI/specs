@@ -30,6 +30,7 @@ async function setup(opts: { reads?: Partial<Record<Take, (copy: string[]) => Pa
   const base = made.deps.callStep;
   const steps: string[] = [];
   const paintPrompts: string[] = [];
+  const paintImages: string[][] = [];
   const deps: Deps = { ...made.deps };
   deps.callStep = async (o) => {
     steps.push(o.step);
@@ -44,6 +45,7 @@ async function setup(opts: { reads?: Partial<Record<Take, (copy: string[]) => Pa
   };
   const paint: Paint = async (o) => {
     paintPrompts.push(o.text);
+    paintImages.push((o.images ?? []).map((i) => takeIn(i.base64)));
     if (opts.paintFails) return { ok: false, error: "500 from the painter", billed: false, model: "gpt-image-2.5-sunburst" } as never;
     return { ok: true, base64: pngFor(takeOf(o.text)), mediaType: "image/png", model: "gpt-image-2.5-sunburst", usd: 0.2, seconds: 40 } as never;
   };
@@ -59,7 +61,7 @@ async function setup(opts: { reads?: Partial<Record<Take, (copy: string[]) => Pa
   };
   const status = async () => body(await run(() => posterStatus(jsonReq("/api/posters/status", { sessionId, postId }), deps)));
   const start = () => run(() => startPoster(jsonReq("/api/posters/start", { sessionId, postId, ...(opts.format ? { format: opts.format } : {}) }), deps, starter, true));
-  return { deps, sessionId, postId, steps, paintPrompts, triggers, starter, paint, status, start };
+  return { deps, sessionId, postId, steps, paintPrompts, paintImages, triggers, starter, paint, status, start };
 }
 
 test("the quick take and the final paint side by side, and the final that passes is served", async () => {
@@ -92,7 +94,7 @@ test("the quick take and the final paint side by side, and the final that passes
 });
 
 test("a final that fails gets one repaint told what failed", async () => {
-  const { start, status, paintPrompts } = await setup({ reads: { final: (copy) => ({ text: [...copy, "Free entry"] }) } });
+  const { start, status, paintPrompts, paintImages } = await setup({ reads: { final: (copy) => ({ text: [...copy, "Free entry"] }) } });
   await start();
   const job = await status();
   assert.equal(job.status, "done");
@@ -103,6 +105,12 @@ test("a final that fails gets one repaint told what failed", async () => {
   assert.equal(paintPrompts.length, 3);
   assert.match(paintPrompts[2]!, /The last painting failed these checks/);
   assert.match(paintPrompts[2]!, /"entry" is painted/);
+  // Anti-slop rules (Nov 27): the repaint gets the failed painting to keep, makes the smallest change, and reports what it did.
+  assert.equal(paintImages[2]!.at(-1), "final");
+  assert.match(paintPrompts[2]!, /smallest change/);
+  const repair = (attempts.find((a) => a.n === 3) as { repair?: { fixed: string[]; unresolved: string[]; introduced: string[] } }).repair;
+  assert.equal(repair?.fixed.length, 2);
+  assert.deepEqual([repair?.unresolved.length, repair?.introduced.length], [0, 0]);
 });
 
 test("when both finals fail, a first look that passed becomes the result", async () => {

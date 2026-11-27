@@ -29,6 +29,8 @@ export type PosterAttempt = {
   pass: boolean;
   /** Plain sentences from core/poster.ts, for the repaint and the owner's notes. Empty on a pass. */
   problems: string[];
+  /** On a repaint: what it fixed, what it left, and anything it broke, against the painting it repaired. */
+  repair?: { fixed: string[]; unresolved: string[]; introduced: string[] };
   model: string;
   seconds: number;
 };
