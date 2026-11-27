@@ -3,6 +3,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { judgePoster, logoRect, LOGO_SPOT, repaintNote, words, PosterReadSchema, type PosterRead } from "../core/poster.ts";
+import { knockoutPixels } from "../core/picks.ts";
+import { logoSizeCall } from "../core/intake.ts";
+import { sizePercent } from "../core/catalog.ts";
 import { paintOpenAI } from "../core/image-openai.ts";
 import { loadPrompt } from "../spike/lib/prompts.ts";
 
@@ -127,4 +130,32 @@ test("the logo fits inside its spot, keeping its shape", () => {
   assert.ok(Math.abs(wide.w / wide.h - 4) < 0.05);
   const tall = logoRect(1080, 1080, 300, 600);
   assert.ok(tall.h <= 1080 * LOGO_SPOT.h + 1 && Math.abs(tall.w / tall.h - 0.5) < 0.05);
+});
+
+test("the owner's logo size scales the logo, capped inside the clear area", () => {
+  const base = logoRect(1024, 1536, 800, 400);
+  const big = logoRect(1024, 1536, 800, 400, 1.5);
+  assert.ok(big.w > base.w * 1.4, `${big.w} vs ${base.w}`);
+  const huge = logoRect(1024, 1536, 800, 400, 3);
+  assert.ok(huge.w <= 1024 * (LOGO_SPOT.clear.w + 0.12), `capped: ${huge.w}`);
+});
+
+test("a plum logo is left as is on a cream patch and knocked out on plum (Nov 27 live poster)", () => {
+  // A few plum pixels and transparent ones, like a logo PNG with a cut-out background.
+  const plum = [0x36, 0x1e, 0x39, 255];
+  const clear = [0, 0, 0, 0];
+  const px = () => [...Array(40).fill(plum).flat(), ...Array(20).fill(clear).flat()];
+  const onCream = px();
+  assert.equal(knockoutPixels(onCream, "#F5EEE3", "#F5EEE3"), false, "plum reads on cream, so it stays plum");
+  const onPlum = px();
+  assert.equal(knockoutPixels(onPlum, "#361E39", "#F5EEE3"), true);
+  assert.deepEqual(onPlum.slice(0, 3), [0xf5, 0xee, 0xe3]);
+});
+
+test("saying the logo is hard to see or too small offers the logo size slider", () => {
+  assert.ok(logoSizeCall("the logo is way too small"));
+  assert.ok(Math.abs(sizePercent((logoSizeCall("the logo is too small", 1)!.props as { value: number }).value) - 125) <= 2, "too small starts the slider bigger");
+  assert.ok(logoSizeCall("I can barely see the logo, it's hard to see"));
+  assert.ok(logoSizeCall("make the logo 150%"));
+  assert.equal(logoSizeCall("change the headline font"), null);
 });

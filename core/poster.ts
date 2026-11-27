@@ -24,12 +24,14 @@ export type PosterRead = z.infer<typeof PosterReadSchema>;
  * speed run 2: painted logos came back misspelled, "HINNEAPOLIS", or twice). The painter keeps a
  * larger clear area around it (`clear`), so the logo sits on calm paper.
  */
-export const LOGO_SPOT = { x: 0.06, y: 0.05, w: 0.24, h: 0.11, clear: { w: 0.34, h: 0.18 } } as const;
+export const LOGO_SPOT = { x: 0.06, y: 0.05, w: 0.3, h: 0.14, clear: { w: 0.42, h: 0.22 } } as const;
 
 /** Where the logo lands on a canvas: fitted inside the spot, aspect kept, top-left aligned. Pixels of the finished (trimmed) canvas. */
-export function logoRect(canvasW: number, canvasH: number, logoW: number, logoH: number) {
-  const boxW = canvasW * LOGO_SPOT.w;
-  const boxH = canvasH * LOGO_SPOT.h;
+export function logoRect(canvasW: number, canvasH: number, logoW: number, logoH: number, ownerScale = 1) {
+  // The owner's logo size (the size slider, 50–200%) scales the spot, capped so it stays inside the clear area.
+  const s = Math.min(Math.max(ownerScale, 0.5), Math.min(LOGO_SPOT.clear.w / LOGO_SPOT.w, LOGO_SPOT.clear.h / LOGO_SPOT.h) + 0.35);
+  const boxW = canvasW * LOGO_SPOT.w * s;
+  const boxH = canvasH * LOGO_SPOT.h * s;
   const scale = Math.min(boxW / Math.max(1, logoW), boxH / Math.max(1, logoH));
   return { x: Math.round(canvasW * LOGO_SPOT.x), y: Math.round(canvasH * LOGO_SPOT.y), w: Math.round(logoW * scale), h: Math.round(logoH * scale) };
 }

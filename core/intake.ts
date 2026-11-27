@@ -424,7 +424,7 @@ export function applyAnswer(
   return { ...base, items };
 }
 
-const LOGO_SIZE = /\b(logo|wordmark|lockup)\b[^.?!]*\b(size|sized|sizing|bigger|larger|smaller|tiny|huge|scale|grow|shrink|\d+\s*%)|\b(bigger|larger|smaller|resize|shrink|grow|scale)\b[^.?!]*\b(logo|wordmark|lockup)\b/i;
+const LOGO_SIZE = /\b(logo|wordmark|lockup)\b[^.?!]*\b(size|sized|sizing|bigger|larger|smaller|small|little|tiny|huge|scale|grow|shrink|hard to see|can'?t see|cannot see|barely|disappears?|vanish(es)?|invisible|\d+\s*%)|\b(bigger|larger|smaller|resize|shrink|grow|scale)\b[^.?!]*\b(logo|wordmark|lockup)\b/i;
 
 /**
  * "Make the logo 30% larger": a size slider built in code, no model call. It starts where the
@@ -435,7 +435,7 @@ export function logoSizeCall(message: string, current = 1): ParsedCall | null {
   const m = message.toLowerCase();
   const pct = Number(m.match(/(\d{1,3})\s*%/)?.[1]);
   const smaller = /\b(smaller|shrink|tiny|less|down|reduce)\b/.test(m);
-  const factor = /\b(double|twice|2x)\b/.test(m) ? 2 : /\bhalf\b/.test(m) ? 0.5 : pct ? (smaller ? 1 - pct / 100 : pct > 100 && !/\b(larger|bigger)\b/.test(m) ? pct / 100 : 1 + pct / 100) : smaller ? 0.8 : /\b(bigger|larger|grow|huge)\b/.test(m) ? 1.25 : 1;
+  const factor = /\b(double|twice|2x)\b/.test(m) ? 2 : /\bhalf\b/.test(m) ? 0.5 : pct ? (smaller ? 1 - pct / 100 : pct > 100 && !/\b(larger|bigger)\b/.test(m) ? pct / 100 : 1 + pct / 100) : /\btoo (small|little|tiny)\b|hard to see|barely|can'?t see|cannot see|disappear|vanish|invisible/.test(m) ? 1.25 : smaller ? 0.8 : /\b(bigger|larger|grow|huge)\b/.test(m) ? 1.25 : 1;
   return {
     component: "ToneSlider",
     props: {
