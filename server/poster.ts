@@ -15,6 +15,7 @@
 import "server-only";
 import { z } from "zod";
 import { LIMITS } from "../core/limits.ts";
+import { OUTPUT_FORMATS, type OutputFormat } from "../core/outputs.ts";
 import { Refusal, json, readJson } from "./http.ts";
 import { assertGenerationOpen } from "./spend.ts";
 import { loadSession, updateSession } from "./sessions.ts";
@@ -22,8 +23,9 @@ import { parseBody, id, type Deps } from "./handlers.ts";
 import { update, type KV } from "./store.ts";
 
 export type PosterAttempt = {
-  /** 1 for the first paint, 2 for the repaint. */
+  /** 1 the quick first look, 2 the final, 3 the final's repaint. */
   n: number;
+  quality?: "low" | "high";
   pass: boolean;
   /** Plain sentences from core/poster.ts, for the repaint and the owner's notes. Empty on a pass. */
   problems: string[];
@@ -42,6 +44,10 @@ export type PosterJob = {
   stage: string;
   ran: boolean;
   attempts: PosterAttempt[];
+  /** Which output (core/outputs.ts). Older jobs have none and paint the post's own canvas. */
+  format?: OutputFormat;
+  /** The quick take, once it passed every check: shown while the final is still painting. */
+  firstLook?: { attempt: number; mediaType: string };
   /** Set when a painting passed every check. */
   result?: { attempt: number; mediaType: string };
   /** The B version (painted plate, real type set by code), when both paintings failed a check. */
@@ -58,6 +64,8 @@ export const posterImageKey = (sessionId: string, postId: string, n: number) => 
 export const posterPlateKey = (sessionId: string, postId: string) => `poster/${sessionId}/${postId}/plate`;
 
 const PostBody = z.strictObject({ sessionId: id, postId: id });
+const StartBody = z.strictObject({ sessionId: id, postId: id, format: z.enum(OUTPUT_FORMATS).optional() });
+const ImageBody = z.strictObject({ sessionId: id, postId: id, which: z.enum(["final", "first"]).optional() });
 
 export async function loadPosterJob(kv: KV, sessionId: string, postId: string) {
   return (await kv.get<PosterJob>(posterKey(sessionId, postId)))?.value ?? null;
@@ -76,7 +84,7 @@ export function posterView(j: PosterJob) {
 }
 
 export async function startPoster(req: Request, deps: Deps, startBackground: StartPosterBackground, painterReady: boolean) {
-  const body = parseBody(PostBody, await readJson(req, LIMITS.jsonBodyBytes));
+  const body = parseBody(StartBody, await readJson(req, LIMITS.jsonBodyBytes));
   const now = deps.now();
   if (!painterReady) throw new Refusal(503, "posters_off", "Posters aren't set up on this server yet.");
   await assertGenerationOpen(deps.kv, deps.settings, now);
@@ -92,10 +100,10 @@ export async function startPoster(req: Request, deps: Deps, startBackground: Sta
   // Claim the session's one poster before any work, so two tabs can't both take it.
   await updateSession(deps.kv, body.sessionId, (s) => {
     const used = s.postersUsed ?? 0;
-    if (used >= LIMITS.postersPerSession) throw new Refusal(429, "poster_cap", "Each visit gets one poster, and this one's been used.");
+    if (used >= LIMITS.postersPerSession) throw new Refusal(429, "poster_cap", `Each visit gets ${LIMITS.postersPerSession} painted outputs, and they've been used.`);
     return { ...s, postersUsed: used + 1 };
   });
-  const job: PosterJob = { status: "painting", token: crypto.randomUUID(), startedAt: now.toISOString(), updatedAt: now.toISOString(), stage: "Painting the poster", ran: false, attempts: [] };
+  const job: PosterJob = { status: "painting", token: crypto.randomUUID(), startedAt: now.toISOString(), updatedAt: now.toISOString(), stage: "Painting a first look", ran: false, attempts: [], ...(body.format ? { format: body.format } : {}) };
   const stored = found ? await deps.kv.put(posterKey(body.sessionId, body.postId), job, { ifMatch: found.etag }) : await deps.kv.put(posterKey(body.sessionId, body.postId), job, { ifNew: true });
   if (!stored) {
     await updateSession(deps.kv, body.sessionId, (s) => ({ ...s, postersUsed: Math.max(0, (s.postersUsed ?? 1) - 1) }));
@@ -122,15 +130,16 @@ export async function posterStatus(req: Request, deps: Deps) {
   return json(posterView(job));
 }
 
-/** The finished poster's bytes. Only a painting that passed every check is ever served. */
+/** The finished poster's bytes, or the first look's. Only a painting that passed every check is ever served. */
 export async function posterImage(req: Request, deps: Deps) {
-  const body = parseBody(PostBody, await readJson(req, LIMITS.jsonBodyBytes));
+  const body = parseBody(ImageBody, await readJson(req, LIMITS.jsonBodyBytes));
   await loadSession(deps.kv, body.sessionId, deps.now());
   const job = await loadPosterJob(deps.kv, body.sessionId, body.postId);
-  if (!job?.result || job.status !== "done") throw new Refusal(404, "no_poster", "This post has no finished poster.");
-  const bytes = await deps.kv.getBytes(posterImageKey(body.sessionId, body.postId, job.result.attempt));
+  const pick = body.which === "first" ? job?.firstLook : job?.status === "done" ? job.result : undefined;
+  if (!pick) throw new Refusal(404, "no_poster", "This post has no finished poster.");
+  const bytes = await deps.kv.getBytes(posterImageKey(body.sessionId, body.postId, pick.attempt));
   if (!bytes) throw new Refusal(404, "no_poster", "This post has no finished poster.");
-  return new Response(bytes, { status: 200, headers: { "content-type": job.result.mediaType, "cache-control": "private, max-age=3600" } });
+  return new Response(bytes, { status: 200, headers: { "content-type": pick.mediaType, "cache-control": "private, max-age=3600" } });
 }
 
 /** The B version's plate: text-free art, so it needs no read-back; the browser sets the real type over it. */

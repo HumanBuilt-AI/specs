@@ -26,7 +26,7 @@ export type PosterRead = z.infer<typeof PosterReadSchema>;
  */
 export const LOGO_SPOT = { x: 0.06, y: 0.05, w: 0.24, h: 0.11, clear: { w: 0.34, h: 0.18 } } as const;
 
-/** Where the logo lands on a canvas: fitted inside the spot, aspect kept, top-left aligned. Pixels. */
+/** Where the logo lands on a canvas: fitted inside the spot, aspect kept, top-left aligned. Pixels of the finished (trimmed) canvas. */
 export function logoRect(canvasW: number, canvasH: number, logoW: number, logoH: number) {
   const boxW = canvasW * LOGO_SPOT.w;
   const boxH = canvasH * LOGO_SPOT.h;
@@ -34,10 +34,12 @@ export function logoRect(canvasW: number, canvasH: number, logoW: number, logoH:
   return { x: Math.round(canvasW * LOGO_SPOT.x), y: Math.round(canvasH * LOGO_SPOT.y), w: Math.round(logoW * scale), h: Math.round(logoH * scale) };
 }
 
-/** The logo spot in words, for the painter and the proofreader. */
-export function logoSpotWords(): string {
+/** The logo spot in words, for the painter and the proofreader, in percent of the painted image. `keep` is the share of the width that stays after trimming (core/outputs.ts). */
+export function logoSpotWords(keep = 1): string {
   const pct = (f: number) => `${Math.round(f * 100)}%`;
-  return `the top-left corner, from the left edge to ${pct(LOGO_SPOT.clear.w)} across and from the top edge to ${pct(LOGO_SPOT.clear.h)} down`;
+  const left = (1 - keep) / 2;
+  const from = left > 0.005 ? `from ${pct(left)} across (where the trimmed strip ends)` : "from the left edge";
+  return `the top-left corner, ${from} to ${pct(left + LOGO_SPOT.clear.w * keep)} across and from the top edge to ${pct(LOGO_SPOT.clear.h)} down`;
 }
 
 export type PosterVerdict = {

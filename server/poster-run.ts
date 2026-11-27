@@ -6,7 +6,6 @@
 // → judge in code (core/poster.ts). A failed check gets one repaint told what failed; a second
 // fail ends in "fallback". Nothing the checks haven't passed is ever served.
 import "server-only";
-import { LIMITS } from "../core/limits.ts";
 import { ComposeSchema, TEXT_SLOTS, type Composition } from "../core/compose.ts";
 import { checkBold, fillEchoes } from "../core/bold.ts";
 import { asData, fillPrompt } from "../core/prompts.ts";
@@ -18,7 +17,8 @@ import { guardedCall, type Deps } from "./handlers.ts";
 import { reserve, settle } from "./spend.ts";
 import { updateSession } from "./sessions.ts";
 import { inputs, pick, copyOf } from "./bold-run.ts";
-import { loadPosterJob, posterImageKey, posterPlateKey, updatePosterJob, type PosterJob, type PosterTrigger } from "./poster.ts";
+import { loadPosterJob, posterImageKey, posterPlateKey, updatePosterJob, type PosterAttempt, type PosterJob, type PosterTrigger } from "./poster.ts";
+import { OUTPUTS, canvasWords, keptWidth, type OutputFormat } from "../core/outputs.ts";
 
 /** The painter, swappable in tests. Real runs use paintOpenAI. */
 export type Paint = typeof paintOpenAI;
@@ -49,39 +49,37 @@ export async function runPoster(deps: Deps, t: PosterTrigger, openaiKey: string 
 async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint: Paint) {
   const x = await inputs(deps, t);
   const set = (change: (j: PosterJob) => PosterJob) => updatePosterJob(deps.kv, t.sessionId, t.postId, change);
-  const size = { width: 1080, height: x.aspect === "4:5" ? 1350 : 1080 };
+  const format: OutputFormat = (await loadPosterJob(deps.kv, t.sessionId, t.postId))?.format ?? (x.aspect === "1:1" ? "square" : "poster");
   const business = x.kit.id === "session" ? asData(x.kit.businessName) : x.kit.businessName;
   const copy = copyOf(x.slots);
   const copyList = TEXT_SLOTS.flatMap((s) => (x.slots[s] ? [x.slots[s]!] : []));
-  const kit = pick(x.chunks, ["positioning-core", "energy", "layout-system", "visual-system", "art-direction", "social-rules", "guardrails"]);
+  const kit = pick(x.chunks, ["positioning-core", "energy", "references", "layout-system", "visual-system", "art-direction", "social-rules", "guardrails"]);
   // The painter never sees the logo: code sets the owner's real file in the logo spot afterwards
   // (the browser composites it), so it can't come back misspelled or twice (Nov 27 speed run 2).
   const images: Image[] = x.photo ? [x.photo] : [];
   const imageList = [x.photo ? `1. The owner's photo. ${x.photoAlt}` : "None: no photo was given.", x.logo ? "The logo file is kept back for code to place." : "No logo file was given."].join("\n");
-  const spot = logoSpotWords();
+  const spot = logoSpotWords(keptWidth(format));
 
-  let verdict: PosterVerdict | null = null;
-  for (let n = 1; n <= LIMITS.posterPaints; n++) {
-    await set((j) => ({ ...j, status: "painting", stage: n === 1 ? "Painting the poster" : "Repainting what didn't pass" }));
+  /** One take: paint, store, read back, judge. Returns the attempt (and keeps the verdict for a repaint). */
+  const take = async (n: number, quality: "low" | "high", note: string) => {
     const filled = fillPrompt("poster-full", CONTENT.prompts["poster-full"], {
       business_name: business,
       intent: x.post.intent,
-      canvas: `${size.width} × ${size.height} px (${x.aspect})`,
+      canvas: canvasWords(format),
       images: imageList,
       copy,
-      direction: `A printed poster for this post. Its goal: ${asData(x.post.brief.goal)}`,
+      direction: `A printed ${OUTPUTS[format].label.toLowerCase()} for this brief. Its goal: ${asData(x.post.brief.goal)}`,
       kit,
-      take_note: verdict ? repaintNote(verdict) : "your best version",
+      take_note: note,
       logo_spot: spot,
     });
     const reservation = await reserve(deps.kv, deps.settings, deps.now(), OPENAI_WORST_USD);
-    const r = await paint({ apiKey, text: `${filled.system}\n\n${filled.user}`, images, aspect: x.aspect, timeoutMs: 240_000 });
+    const r = await paint({ apiKey, text: `${filled.system}\n\n${filled.user}`, images, aspect: format === "square" ? "1:1" : "4:5", size: OUTPUTS[format].size, quality, timeoutMs: 240_000 });
     await settle(deps.kv, reservation, r.ok ? r.usd : r.billed ? OPENAI_WORST_USD : 0);
-    if (!r.ok) throw new Error(`The image model didn't paint the poster: ${r.error}`);
+    if (!r.ok) throw new Error(`The image model didn't paint the ${OUTPUTS[format].label.toLowerCase()}: ${r.error}`);
     const bytes = Buffer.from(r.base64, "base64");
     await deps.kv.putBytes(posterImageKey(t.sessionId, t.postId, n), bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, { attempt: n, mediaType: r.mediaType });
 
-    await set((j) => ({ ...j, status: "checking", stage: "Reading every word back" }));
     const rb = fillPrompt("read-back", CONTENT.prompts["read-back"], {
       copy,
       photo_line: x.photo ? "The owner's photo is the third." : "No owner photo is given.",
@@ -94,18 +92,47 @@ async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint
       ...(x.photo ? [{ ...x.photo, label: "Image 3: the owner's photo." }] : []),
     ];
     const read = await guardedCall(deps, "read_back", { ...rb, images: checkImages }, PosterReadSchema);
-    verdict = judgePoster(read.data, copyList, { photoGiven: Boolean(x.photo), logoGiven: Boolean(x.logo), logoByCode: Boolean(x.logo) });
-    const attempt = { n, pass: verdict.pass, problems: verdict.problems.slice(0, 12).map((p) => p.slice(0, 300)), model: r.model, seconds: r.seconds };
-    if (verdict.pass) {
-      await set((j) => ({ ...j, status: "done", stage: "Done", attempts: [...j.attempts, attempt], result: { attempt: n, mediaType: r.mediaType } }));
-      return;
-    }
-    await set((j) => ({ ...j, attempts: [...j.attempts, attempt] }));
+    const verdict = judgePoster(read.data, copyList, { photoGiven: Boolean(x.photo), logoGiven: Boolean(x.logo), logoByCode: Boolean(x.logo) });
+    const attempt: PosterAttempt = { n, quality, pass: verdict.pass, problems: verdict.problems.slice(0, 12).map((p) => p.slice(0, 300)), model: r.model, seconds: r.seconds };
+    const media = r.mediaType;
+    // A first look that passed is shown while the final is still painting; the final replaces it.
+    await set((j) => ({
+      ...j,
+      attempts: [...j.attempts, attempt],
+      ...(verdict.pass && quality === "low" && j.status !== "done" ? { firstLook: { attempt: n, mediaType: media } } : {}),
+      stage: j.status === "done" ? j.stage : quality === "low" ? "Painting the final version" : "Checking the final version",
+    }));
+    return { attempt, verdict, mediaType: media };
+  };
+
+  // The quick take (about 20 s) and the final (about 35 s) paint side by side (Nov 27 speed run 2:
+  // two at once is fine, six at once slowed every take). The first that passes is shown; the final wins.
+  await set((j) => ({ ...j, status: "painting", stage: "Painting a first look" }));
+  const [quick, final] = await Promise.allSettled([take(1, "low", "a quick first look: bold and simple, every word large"), take(2, "high", "your best version")]);
+  if (final.status === "fulfilled" && final.value.verdict.pass) {
+    await set((j) => ({ ...j, status: "done", stage: "Done", result: { attempt: 2, mediaType: final.value.mediaType } }));
+    return;
   }
-  // Both paintings failed a check: build the B version instead, a painted plate with the real type
-  // set over it by code, so every word, the logo and the photo are exact by construction.
+  if (quick.status === "rejected" && final.status === "rejected") throw final.reason;
+  // The final missed a check: one repaint told what failed. The first look stays up meanwhile.
+  const missed = final.status === "fulfilled" ? final.value.verdict : null;
+  await set((j) => ({ ...j, status: "painting", stage: "Repainting what didn't pass" }));
+  const again = await take(3, "high", missed ? repaintNote(missed) : "your best version").catch(() => null);
+  if (again?.verdict.pass) {
+    await set((j) => ({ ...j, status: "done", stage: "Done", result: { attempt: 3, mediaType: again.mediaType } }));
+    return;
+  }
+  // The quick take passed even though the finals didn't: it becomes the result rather than nothing.
+  if (quick.status === "fulfilled" && quick.value.verdict.pass) {
+    await set((j) => ({ ...j, status: "done", stage: "Done", result: { attempt: 1, mediaType: quick.value.mediaType } }));
+    return;
+  }
+  // Nothing passed. The B version (a painted plate with the real type set over it by code, so
+  // every word, the logo and the photo are exact by construction) exists for the square only so far.
+  if (format !== "square") throw new Error(`None of the paintings passed the checks (${(missed ?? again?.verdict)?.problems.slice(0, 2).join("; ") ?? "no painting"}).`);
+  const size = { width: 1080, height: 1080 };
   await set((j) => ({ ...j, status: "fallback", stage: "Building the backup version" }));
-  await buildB(deps, t, x, apiKey, paint, set, { business, copy, kit, canvas: `${size.width} × ${size.height} px (${x.aspect}). The brand's safe margin is var(--safe-margin).` });
+  await buildB(deps, t, x, apiKey, paint, set, { business, copy, kit, canvas: `${size.width} × ${size.height} px (1:1). The brand's safe margin is var(--safe-margin).` });
 }
 
 async function buildB(
@@ -153,7 +180,7 @@ async function buildB(
     take_note: "the brand's signature look",
   });
   const reservation = await reserve(deps.kv, deps.settings, deps.now(), OPENAI_WORST_USD);
-  const r = await paint({ apiKey, text: `${pp.system}\n\n${pp.user}`, images: [], aspect: x.aspect, timeoutMs: 240_000 });
+  const r = await paint({ apiKey, text: `${pp.system}\n\n${pp.user}`, images: [], aspect: "1:1", timeoutMs: 240_000 });
   await settle(deps.kv, reservation, r.ok ? r.usd : r.billed ? OPENAI_WORST_USD : 0);
   if (!r.ok) throw new Error(`The image model didn't paint the backup art: ${r.error}`);
   const bytes = Buffer.from(r.base64, "base64");
