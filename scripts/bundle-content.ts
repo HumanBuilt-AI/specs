@@ -17,7 +17,7 @@ const DEMO_BRANDS = ["half-acre-club", "third-shift-slice", "hollis-ware"] as co
 
 const read = (path: string) => readFileSync(path, "utf8");
 
-const PROMPT_NAMES = ["plan", "write", "critique", "read", "assemble", "intake", "compose", "change", "directions", "compose-bold", "art-critique", "sketch", "rebuild", "poster-full", "read-back"] as const;
+const PROMPT_NAMES = ["plan", "write", "critique", "read", "assemble", "intake", "compose", "change", "directions", "compose-bold", "art-critique", "sketch", "rebuild", "poster-full", "read-back", "print-kit", "plate", "plate-type"] as const;
 
 type BriefFile = { business_name: string; business_line: string; photos: { file: string; alt: string }[] };
 

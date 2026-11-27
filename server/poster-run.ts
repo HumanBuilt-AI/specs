@@ -7,7 +7,8 @@
 // fail ends in "fallback". Nothing the checks haven't passed is ever served.
 import "server-only";
 import { LIMITS } from "../core/limits.ts";
-import { TEXT_SLOTS } from "../core/compose.ts";
+import { ComposeSchema, TEXT_SLOTS, type Composition } from "../core/compose.ts";
+import { checkBold, fillEchoes } from "../core/bold.ts";
 import { asData, fillPrompt } from "../core/prompts.ts";
 import { PosterReadSchema, judgePoster, repaintNote, type PosterVerdict } from "../core/poster.ts";
 import { paintOpenAI, OPENAI_WORST_USD } from "../core/image-openai.ts";
@@ -16,7 +17,7 @@ import { CONTENT } from "./generated/content.ts";
 import { guardedCall, type Deps } from "./handlers.ts";
 import { reserve, settle } from "./spend.ts";
 import { inputs, pick, copyOf } from "./bold-run.ts";
-import { loadPosterJob, posterImageKey, updatePosterJob, type PosterJob, type PosterTrigger } from "./poster.ts";
+import { loadPosterJob, posterImageKey, posterPlateKey, updatePosterJob, type PosterJob, type PosterTrigger } from "./poster.ts";
 
 /** The painter, swappable in tests. Real runs use paintOpenAI. */
 export type Paint = typeof paintOpenAI;
@@ -93,6 +94,66 @@ async function paintAndCheck(deps: Deps, t: PosterTrigger, apiKey: string, paint
     }
     await set((j) => ({ ...j, attempts: [...j.attempts, attempt] }));
   }
-  // Both paintings failed a check: the browser builds the B version instead (painted plate, real type).
+  // Both paintings failed a check: build the B version instead, a painted plate with the real type
+  // set over it by code, so every word, the logo and the photo are exact by construction.
   await set((j) => ({ ...j, status: "fallback", stage: "Building the backup version" }));
+  await buildB(deps, t, x, apiKey, paint, set, { business, copy, kit, canvas: `${size.width} × ${size.height} px (${x.aspect}). The brand's safe margin is var(--safe-margin).` });
+}
+
+async function buildB(
+  deps: Deps,
+  t: PosterTrigger,
+  x: Awaited<ReturnType<typeof inputs>>,
+  apiKey: string,
+  paint: Paint,
+  set: (change: (j: PosterJob) => PosterJob) => Promise<PosterJob>,
+  o: { business: string; copy: string; kit: string; canvas: string },
+) {
+  const printKit = fillPrompt("print-kit", CONTENT.prompts["print-kit"], {}).system;
+  const plateType = fillPrompt("plate-type", CONTENT.prompts["plate-type"], { fit: "Design the type layer for a painted plate." }).system;
+  const designKit = pick(x.chunks, ["energy", "layout-system", "visual-system", "art-direction", "social-rules"]);
+  const photoLine = x.photo ? `The first image attached. ${x.photoAlt}` : "None.";
+  const logoLine = x.logo
+    ? `The ${x.photo ? "second" : "first"} image attached: the brand's real logo, placed by code in the wordmark slot.`
+    : `No logo image; the wordmark slot gets the lockup lines: ${x.kit.wordmarkLines.map(asData).join(" / ")}.`;
+  const images: Image[] = [...(x.photo ? [x.photo] : []), ...(x.logo ? [x.logo] : [])];
+
+  // The type layer, checked in code (every slot, the photo when there is one), with one fix.
+  let layer: Composition | null = null;
+  let last: { c: Composition; errors: string[] } | null = null;
+  for (let n = 1; n <= 2 && !layer; n++) {
+    const feedback = last ? `<previous_attempt_sent_back>\nYour previous HTML:\n${last.c.html}\n\nYour previous CSS:\n${last.c.css}\n\nProblems found by code:\n${last.errors.map((e) => `- ${e}`).join("\n")}\n</previous_attempt_sent_back>` : "";
+    const p = fillPrompt("compose-bold", CONTENT.prompts["compose-bold"], { kit: designKit, tokens: x.kit.tokensCss, business_name: o.business, intent: x.post.intent, goal: asData(x.post.brief.goal), direction: "A printed poster for this post, as strong as a screen-printed flyer. Its art is painted afterwards under your type.", canvas: o.canvas, copy: o.copy, photo: photoLine, logo: logoLine, feedback });
+    const out = await guardedCall(deps, "compose_print", { system: `${p.system}\n\n${printKit}\n\n${plateType}`, user: p.user, images }, ComposeSchema);
+    const check = checkBold(out.data, x.slots, Boolean(x.photo));
+    if (check.ok) layer = out.data;
+    else last = { c: out.data, errors: check.errors };
+  }
+  if (!layer) throw new Error(`The backup layout didn't pass the checks: ${last?.errors.join("; ") ?? "no layout"}`);
+
+  // The plate: text-free art, painted around the type layer's art zones.
+  await set((j) => ({ ...j, stage: "Painting the backup art" }));
+  const artZones = layer.rationale.find((r) => /art/i.test(r.decision))?.choice ?? "Paper texture over the whole canvas, with the illustration in the open areas.";
+  const pp = fillPrompt("plate", CONTENT.prompts.plate, {
+    business_name: o.business,
+    intent: x.post.intent,
+    canvas: o.canvas,
+    art_zones: asData(artZones),
+    zones: "Not measured. Keep plain, calm paper wherever the art zones above leave room for the type, the logo and the photo.",
+    kit: pick(x.chunks, ["energy", "visual-system", "art-direction"]),
+    take: "1",
+    take_note: "the brand's signature look",
+  });
+  const reservation = await reserve(deps.kv, deps.settings, deps.now(), OPENAI_WORST_USD);
+  const r = await paint({ apiKey, text: `${pp.system}\n\n${pp.user}`, images: [], aspect: x.aspect, timeoutMs: 240_000 });
+  await settle(deps.kv, reservation, r.ok ? r.usd : r.billed ? OPENAI_WORST_USD : 0);
+  if (!r.ok) throw new Error(`The image model didn't paint the backup art: ${r.error}`);
+  const bytes = Buffer.from(r.base64, "base64");
+  await deps.kv.putBytes(posterPlateKey(t.sessionId, t.postId), bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, { mediaType: r.mediaType });
+  await set((j) => ({
+    ...j,
+    status: "b_ready",
+    stage: "Done",
+    b: { html: fillEchoes(layer!.html, x.slots).slice(0, 30000), css: layer!.css.slice(0, 30000), usesPhoto: Boolean(x.photo) && /data-slot=["']?photo/.test(layer!.html), rationale: layer!.rationale.slice(0, 12), plateMediaType: r.mediaType },
+  }));
 }

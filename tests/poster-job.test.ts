@@ -4,12 +4,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { respond } from "../server/http.ts";
 import { startSession, createPost, writePost } from "../server/handlers.ts";
-import { startPoster, posterStatus, posterImage, type PosterTrigger } from "../server/poster.ts";
+import { startPoster, posterStatus, posterImage, posterPlate, type PosterTrigger } from "../server/poster.ts";
 import { runPoster, type Paint } from "../server/poster-run.ts";
 import { todaysSpend } from "../server/spend.ts";
 import type { Deps } from "../server/handlers.ts";
 import type { PosterRead } from "../core/poster.ts";
-import { makeDeps, jsonReq, body, brief } from "./helpers.ts";
+import { makeDeps, jsonReq, body, brief, COMPOSED } from "./helpers.ts";
 
 const run = (fn: () => Promise<Response>) => respond(fn);
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(3000, 7)]).toString("base64");
@@ -32,6 +32,7 @@ async function setup(opts: { reads?: ((copy: string[]) => Partial<PosterRead>)[]
       const data: PosterRead = { text: copy, logo_text: [], logo: "same", logo_count: 1, logo_notes: "", photo: (o.images?.length ?? 0) === 3 ? "same" : "none_given", photo_notes: "", hard_to_read: [], ...tweak };
       return { data: data as never, usage: { step: o.step, model: "claude-sonnet-5-5", input: 1, output: 1, cacheRead: 0, cacheWrite: 0, usd: 0.02 } };
     }
+    if (o.step === "compose_print") return { data: { ...COMPOSED, rationale: [...COMPOSED.rationale, { decision: "art zones", choice: "A big record lower right.", reason: "Room for type top left.", cites: [] }] } as never, usage: { step: o.step, model: "claude-sonnet-5-5", input: 1, output: 1, cacheRead: 0, cacheWrite: 0, usd: 0.1 } };
     return base(o);
   };
   const paint: Paint = async (o) => {
@@ -88,15 +89,25 @@ test("a failed check gets one repaint told what failed", async () => {
   assert.match(paintPrompts[1]!, /"entry" is painted/);
 });
 
-test("two failed checks end in the fallback, and nothing unchecked is served", async () => {
+test("two failed checks build the B fallback, and the failed paintings are never served", async () => {
   const redrawn = () => ({ logo: "redrawn" as const, logo_notes: "Letters respaced." });
-  const { deps, sessionId, postId, start, status } = await setup({ reads: [redrawn, redrawn] });
+  const { deps, sessionId, postId, start, status, steps, paintPrompts } = await setup({ reads: [redrawn, redrawn] });
   await start();
   const job = await status();
-  assert.equal(job.status, "fallback");
+  assert.equal(job.status, "b_ready", String(job.error));
   assert.equal((job.attempts as unknown[]).length, 2);
   assert.equal(job.result, undefined);
-  assert.equal((await run(() => posterImage(jsonReq("/api/posters/image", { sessionId, postId }), deps))).status, 404);
+  assert.equal((await run(() => posterImage(jsonReq("/api/posters/image", { sessionId, postId }), deps))).status, 404, "a painting that failed is never served");
+  // B: a type layer checked in code, then a text-free plate painted around its art zones.
+  assert.ok(steps.includes("compose_print"));
+  assert.equal(paintPrompts.length, 3);
+  assert.match(paintPrompts[2]!, /A big record lower right/);
+  assert.match(paintPrompts[2]!, /no text at all/);
+  const b = job.b as { html: string; usesPhoto: boolean };
+  assert.match(b.html, /data-slot="headline"/);
+  const plate = await run(() => posterPlate(jsonReq("/api/posters/plate", { sessionId, postId }), deps));
+  assert.equal(plate.status, 200);
+  assert.equal(plate.headers.get("content-type"), "image/png");
 });
 
 test("one poster per visit, a repeated trigger spends nothing, and a painter error fails the job", async () => {

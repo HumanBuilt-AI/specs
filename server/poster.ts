@@ -8,6 +8,7 @@
 //   POST /api/posters/start   claims the session's one poster and starts the painting
 //   POST /api/posters/status  the job as it stands (stage, attempts, result)
 //   POST /api/posters/image   the finished poster's image bytes
+//   POST /api/posters/plate   the B version's painted plate (text-free art the browser sets type over)
 //
 // The background run (server/poster-run.ts) checks a per-job token before doing anything, so only
 // a job this file started can spend money, and every call is reserved against the daily cap first.
@@ -31,8 +32,8 @@ export type PosterAttempt = {
 };
 
 export type PosterJob = {
-  /** painting → checking → (painting → checking) → done | fallback | failed */
-  status: "painting" | "checking" | "done" | "fallback" | "failed";
+  /** painting → checking → (painting → checking) → done, or after two failed checks fallback → b_ready; failed on an error */
+  status: "painting" | "checking" | "done" | "fallback" | "b_ready" | "failed";
   /** Shared only with the background function, never sent to the browser. */
   token: string;
   startedAt: string;
@@ -43,6 +44,8 @@ export type PosterJob = {
   attempts: PosterAttempt[];
   /** Set when a painting passed every check. */
   result?: { attempt: number; mediaType: string };
+  /** The B version (painted plate, real type set by code), when both paintings failed a check. */
+  b?: { html: string; css: string; usesPhoto: boolean; rationale: { decision: string; choice: string; reason: string; cites: string[] }[]; plateMediaType: string };
   error?: string;
 };
 
@@ -52,6 +55,7 @@ export type StartPosterBackground = (t: PosterTrigger) => Promise<void>;
 
 export const posterKey = (sessionId: string, postId: string) => `poster/${sessionId}/${postId}`;
 export const posterImageKey = (sessionId: string, postId: string, n: number) => `poster/${sessionId}/${postId}/paint/${n}`;
+export const posterPlateKey = (sessionId: string, postId: string) => `poster/${sessionId}/${postId}/plate`;
 
 const PostBody = z.strictObject({ sessionId: id, postId: id });
 
@@ -123,4 +127,15 @@ export async function posterImage(req: Request, deps: Deps) {
   const bytes = await deps.kv.getBytes(posterImageKey(body.sessionId, body.postId, job.result.attempt));
   if (!bytes) throw new Refusal(404, "no_poster", "This post has no finished poster.");
   return new Response(bytes, { status: 200, headers: { "content-type": job.result.mediaType, "cache-control": "private, max-age=3600" } });
+}
+
+/** The B version's plate: text-free art, so it needs no read-back; the browser sets the real type over it. */
+export async function posterPlate(req: Request, deps: Deps) {
+  const body = parseBody(PostBody, await readJson(req, LIMITS.jsonBodyBytes));
+  await loadSession(deps.kv, body.sessionId, deps.now());
+  const job = await loadPosterJob(deps.kv, body.sessionId, body.postId);
+  if (!job?.b || job.status !== "b_ready") throw new Refusal(404, "no_plate", "This poster has no backup version.");
+  const bytes = await deps.kv.getBytes(posterPlateKey(body.sessionId, body.postId));
+  if (!bytes) throw new Refusal(404, "no_plate", "This poster has no backup version.");
+  return new Response(bytes, { status: 200, headers: { "content-type": job.b.plateMediaType, "cache-control": "private, max-age=3600" } });
 }

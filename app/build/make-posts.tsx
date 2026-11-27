@@ -19,6 +19,8 @@ import { KitDownload } from "../ui/KitDownload.tsx";
 import { Working } from "../ui/working.tsx";
 import { renderPost } from "../lib/render-post.ts";
 import { BoldVersion, type BoldChoice } from "./bold-version.tsx";
+import { PosterCard } from "./poster-card.tsx";
+import { PRINT_TEXTURE_CSS } from "../../core/print.ts";
 
 type Note = { decision: string; choice: string; reason: string; cites: string[] };
 type Kit = {
@@ -86,6 +88,7 @@ export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: st
   const [left, setLeft] = useState<number>(LIMITS.postsPerSession);
   const [busy, setBusy] = useState(false);
   const [boldLeft, setBoldLeft] = useState<number>(LIMITS.boldPerSession);
+  const [postersLeft, setPostersLeft] = useState<number>(LIMITS.postersPerSession);
   // The post the page is following: scrolled to when it starts, flagged with a pill when it's ready off screen.
   const [follow, setFollow] = useState<string | null>(null);
   const [readyOffscreen, setReadyOffscreen] = useState<string | null>(null);
@@ -354,6 +357,18 @@ export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: st
                     onStart={() => setBoldLeft(0)}
                     pageFor={(c) => buildComposedPage({ composition: { html: c.html, css: c.css }, slots: p.bold!.slots, aspect: p.bold!.aspect, tokensCss: kit.tokensCss, fontsHref: kit.fontsHref, wordmarkLines: kit.wordmarkLines, logoSrc: logo, photo: c.usesPhoto ? p.bold!.photo : null })}
                     onChoose={(choice) => choose(p.id, choice)}
+                  />
+                )}
+                {kit && p.bold && !p.stage && (
+                  <PosterCard
+                    sessionId={sessionId}
+                    postId={p.id}
+                    aspect={p.bold.aspect}
+                    available={postersLeft > 0}
+                    onStart={() => setPostersLeft(0)}
+                    pageForB={(b) =>
+                      buildComposedPage({ composition: { html: b.html, css: b.css }, slots: p.bold!.slots, aspect: p.bold!.aspect, tokensCss: kit.tokensCss, fontsHref: kit.fontsHref, wordmarkLines: kit.wordmarkLines, logoSrc: logo, photo: b.usesPhoto ? p.bold!.photo : null }).replace("</head>", `<style>${PRINT_TEXTURE_CSS}</style></head>`)
+                    }
                   />
                 )}
               </article>
