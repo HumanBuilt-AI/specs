@@ -14,6 +14,7 @@ const COPY = [
 ];
 
 const clean: PosterRead = {
+  photo_text: [],
   text: ["HOLIDAY", "LISTENING PARTY", "A night of music discovery, good drinks & great company.", "12/20/26 · 4:20PM - 10PM", "Alcoholic cocktails · Mocktails · Small food offerings"],
   logo_text: ["Good Company", "Records & CDs · Minneapolis"],
   logo: "same",
@@ -99,4 +100,9 @@ test("the OpenAI painter moves to the next model on a 404 and never sends the ke
     assert.equal(s.url, "https://api.openai.com/v1/images/edits");
     assert.equal(s.auth, "Bearer test-key");
   }
+});
+
+test("words already in the owner's photo, like the shop's own sign, aren't invented copy", () => {
+  const v = judgePoster({ ...clean, photo_text: ["good company RECORDS & CDs"], text: [...clean.text, "good company RECORDS & CDs"] }, COPY, { photoGiven: true });
+  assert.equal(v.pass, true, v.problems.join("; "));
 });
