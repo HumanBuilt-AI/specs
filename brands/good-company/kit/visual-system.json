@@ -9,13 +9,13 @@
     "confidence": "medium",
     "sources": [
       {
-        "upload": "Scott's Good Company asset folder",
-        "location": "palette.json, brand.css, fonts/ (Nov 26 live test)"
+        "upload": "palette.json, brand.css, content/brand.json",
+        "location": "Scott's good-company-brand-kit folder"
       }
     ],
     "version": 1,
     "fictional": true,
-    "summary": "A neighborhood record shop's flyer pinned by the register: cream paper, plum ink, one hit of record-label red. Fraunces for the wordmark and headlines, Plus Jakarta Sans for everything else. Draft for the Nov 27 poster spike; check against palette.json."
+    "summary": "A neighborhood record shop's printed flyer: cream paper, plum ink, cherry red like a record label, with clay, sage and camel as quiet supporting colors. Fraunces for the wordmark and headlines, Plus Jakarta Sans for everything else. Cream is Specs' paper color (the folder's palette has no light color)."
   },
   "concept": "A flyer pinned by the register of a record shop that's been there for years: paper that's been handled, plum ink, a red dot like a record label.",
   "color": {
@@ -23,7 +23,7 @@
       "hex": "#F5EEE3",
       "name": "Sleeve cream",
       "role": "Paper. The ground of every post and poster.",
-      "rule": "Cream does most of the work, because the brand reads as printed paper first."
+      "rule": "Cream does most of the work, because the brand reads as printed paper first. Not in the brand's palette.json: Specs' paper color, from Specs' own Good Company post."
     },
     "plum": {
       "hex": "#361E39",
@@ -33,7 +33,7 @@
     },
     "red": {
       "hex": "#BE3042",
-      "name": "Label red",
+      "name": "Cherry",
       "role": "One accent: a word of the headline, a date box, bullet dots, the record label.",
       "rule": "Red is the record label in the logo, so it means 'this one'. One red idea per post; large type (48px+) or marks only."
     },
@@ -42,6 +42,24 @@
       "name": "Pine (seasonal)",
       "role": "Holiday pieces only: a painted band or a sprig.",
       "rule": "Seasonal, not core. Only when the brief is a holiday piece, and only as art or a band with cream type on it (about 9:1)."
+    },
+    "clay": {
+      "hex": "#AA7063",
+      "name": "Clay",
+      "role": "A supporting color for illustration or a painted band.",
+      "rule": "Art and bands only; cream type on clay is about 3.6:1, so 48px and up."
+    },
+    "sage": {
+      "hex": "#AEAE9B",
+      "name": "Sage",
+      "role": "A soft supporting color for illustration or a quiet band.",
+      "rule": "Art and bands only; plum type on sage reads (about 7:1)."
+    },
+    "camel": {
+      "hex": "#BD9E7B",
+      "name": "Camel",
+      "role": "A warm supporting color, like a worn sleeve.",
+      "rule": "Art and bands only; plum type on camel reads (about 6:1)."
     }
   },
   "pairings": {

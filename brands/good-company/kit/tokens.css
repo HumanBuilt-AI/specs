@@ -2,8 +2,11 @@
 :root {
   --color-cream: #F5EEE3; /* Sleeve cream */
   --color-plum: #361E39; /* Plum ink */
-  --color-red: #BE3042; /* Label red */
+  --color-red: #BE3042; /* Cherry */
   --color-pine: #2E4636; /* Pine (seasonal) */
+  --color-clay: #AA7063; /* Clay */
+  --color-sage: #AEAE9B; /* Sage */
+  --color-camel: #BD9E7B; /* Camel */
   --font-wordmark: "Fraunces", system-ui, sans-serif;
   --weight-wordmark: 700;
   --font-heading: "Fraunces", system-ui, sans-serif;
