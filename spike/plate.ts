@@ -55,6 +55,9 @@ const PLATE_TAKES = Number(argOf("--takes") ?? (painters.length > 1 ? 1 : 2));
 const skipC = args.includes("--skip-c");
 const skipA = args.includes("--skip-a");
 const C_TAKES = Number(argOf("--c-takes") ?? 1);
+// --reuse output/plate-<run-id>: take images an earlier run already painted (same file names) instead of paying for them again.
+const REUSE = argOf("--reuse");
+if (REUSE && !existsSync(join(REUSE, "posts"))) throw new Error(`--reuse: no posts/ folder in ${REUSE}`);
 const keys: Record<Painter, string | undefined> = { gemini: process.env.GEMINI_API_KEY, openai: process.env.OPENAI_API_KEY };
 for (const p of painters) if (!keys[p]) throw new Error(`${p === "gemini" ? "GEMINI_API_KEY" : "OPENAI_API_KEY"} is missing from .env.`);
 
@@ -240,6 +243,17 @@ const readIssues = (r?: ReadCheck) => (r ? [...r.missing.map((w) => `"${w}" can'
 // The image models, saving what they paint.
 const modelUsed: Partial<Record<Painter, string>> = {};
 async function paint(painter: Painter, what: string, file: string, text: string, images: Image[]): Promise<{ file: string; model: string } | { error: string }> {
+  if (REUSE) {
+    for (const ext of ["png", "jpg"]) {
+      const from = join(REUSE, "posts", `${file}.${ext}`);
+      if (!existsSync(from)) continue;
+      const out = `posts/${file}.${ext}`;
+      copyFileSync(from, join(runDir, out));
+      imageCalls.push({ what: `${what} (reused)`, model: "reused", usd: 0, seconds: 0 });
+      return { file: out, model: `reused from ${REUSE}` };
+    }
+    console.log(`  --reuse: no ${file} in ${REUSE}, painting it`);
+  }
   const r = painter === "gemini"
     ? await paintSketch({ apiKey: keys.gemini!, text, images, aspect: poster.aspect, model: modelUsed.gemini ?? null })
     : await paintOpenAI({ apiKey: keys.openai!, text, images, aspect: poster.aspect, model: modelUsed.openai ?? null });
