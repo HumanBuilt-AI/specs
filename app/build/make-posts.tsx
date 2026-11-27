@@ -1,24 +1,20 @@
 "use client";
 
-// Make posts (spec, user flow step 5) for the visitor's own kit. For each brief the browser asks
-// the server to plan, write and lay out the post, one request at a time so none nears the
-// function's time limit. It checks each composed layout here, in a hidden frame, with the same
-// probe the spike uses; problems go back as codes for one fix, and after that the post uses
-// its template. The without-kit version is written alongside for the toggle.
+// Make something (build plan "Specs: new kit flow", Nov 27) from the visitor's own kit: pick the
+// output (Poster 11×17, Story 9:16 or Instagram 1:1), say what it's for, and Specs writes the copy
+// from the kit (plan, then write), then paints it (app/build/poster-card.tsx follows the job). Every
+// output is painted the same way; the instant HTML post and "Make it bolder" are gone. A post type
+// is optional.
 import { useCallback, useEffect, useState } from "react";
 import { LIMITS, POST_INTENTS, charCount, type PostIntent } from "../../core/limits.ts";
-import { buildComposedPage, TEXT_SLOTS, type Composition, type ProbeIssue, type TextSlot } from "../../core/compose.ts";
-import { buildPostPage, wordmarkHtml, type PostLook } from "../../core/post-html.ts";
-import { escapeHtml, findTemplate, parseTemplates, type TemplateId } from "../../core/templates.ts";
-import type { PropsOf } from "../../core/catalog.ts";
-import { call, callAgainIfDropped, isDropped, type ApiError } from "../lib/api.ts";
-import { PostPreview } from "../ui/catalog/PostPreview.tsx";
+import { buildComposedPage, TEXT_SLOTS, type TextSlot } from "../../core/compose.ts";
+import { OUTPUTS, OUTPUT_FORMATS, type OutputFormat } from "../../core/outputs.ts";
+import type { TemplateId } from "../../core/templates.ts";
+import { call, callAgainIfDropped, isDropped } from "../lib/api.ts";
 import { withFontFiles } from "../lib/fonts.ts";
 import { logoDataUrl, useLogoFor } from "../lib/logo.ts";
 import { KitDownload } from "../ui/KitDownload.tsx";
 import { Working } from "../ui/working.tsx";
-import { renderPost } from "../lib/render-post.ts";
-import { BoldVersion, type BoldChoice } from "./bold-version.tsx";
 import { PosterCard } from "./poster-card.tsx";
 import { PRINT_TEXTURE_CSS } from "../../core/print.ts";
 
@@ -29,50 +25,25 @@ type Kit = {
   tokensCss: string;
   wordmarkLines: string[];
   fontsHref: string;
-  templates: Record<TemplateId, string>;
-  templatesManifest: string;
-  baseCss: string;
-  neutralTokensCss: string;
   photos: { file: string; uploadId?: string }[];
   logoUploadId: string | null;
   fontFiles?: { uploadId: string; family: string; ext: "ttf" | "otf" | "woff" | "woff2" }[];
 };
 type Slots = Record<string, string | null>;
-type Post = {
+type Made = {
   id: string;
   /** Stays the same when the server's id replaces the temporary one, so the card isn't remounted. */
   uid: string;
-  intent: PostIntent;
+  format: OutputFormat;
   goal: string;
   stage: string | null;
   error?: string;
-  preview?: PropsOf<"PostPreview">;
-  layoutNote?: string;
-  /** The kit look the post was drawn with, so a kit change can restyle it in place. */
-  look?: Look;
-  restyled?: number;
-  /** What the bold pass needs to draw this post's candidates: its copy, photo and canvas, and the post as first made. */
-  bold?: { aspect: "1:1" | "4:5"; slots: Record<TextSlot, string | null>; photo: { src: string; alt: string } | null; quickPage: string; copyNotes: Note[]; original?: { html: string; rationale: PropsOf<"PostPreview">["rationale"] } };
+  /** The written copy and photo, for the backup version if no painting passes. */
+  copy?: { slots: Record<TextSlot, string | null>; photo: { src: string; alt: string } | null };
 };
 
 const INTENT_LABEL: Record<PostIntent, string> = { promo: "Promo", announcement: "Announcement", event: "Event", testimonial: "Testimonial", tip: "Tip" };
-const LAYOUT_NOTE = /template|layout|composition|photo|image|crop/i;
-const RETRY_NOTE = /^(fix|fixes|fix from|previous|retry)/i;
-const messageOf = (e: unknown) => (isDropped(e) ? "The connection dropped before this post came back. Try making it again." : e instanceof Error ? e.message : "Something went wrong.");
-
-/** What a post borrows from the kit as it's drawn: colors and fonts, and the sign-off (logo or name). */
-type Look = { tokensCss: string; fontsHref?: string; wordmarkLines: string[]; logoSrc: string | null };
-const sameLook = (a: Look, b: Look) => a.tokensCss === b.tokensCss && a.fontsHref === b.fontsHref && a.logoSrc === b.logoSrc && a.wordmarkLines.join("\n") === b.wordmarkLines.join("\n");
-
-/** Swaps a post's kit colors, fonts and sign-off for new ones. Layout and copy stay; no model call. */
-function restyle(html: string, from: Look, to: Look): string {
-  let out = html.replace(`<style>${from.tokensCss}</style>`, () => `<style>${to.tokensCss}</style>`);
-  const [oldSign, newSign] = [wordmarkHtml(from.wordmarkLines, from.logoSrc), wordmarkHtml(to.wordmarkLines, to.logoSrc)];
-  if (oldSign !== newSign) out = out.split(oldSign).join(newSign);
-  const link = (h?: string) => (h ? `<link rel="stylesheet" href="${escapeHtml(h)}">` : "");
-  if (from.fontsHref !== to.fontsHref && from.fontsHref && to.fontsHref) out = out.replace(link(from.fontsHref), () => link(to.fontsHref));
-  return out;
-}
+const messageOf = (e: unknown) => (isDropped(e) ? "The connection dropped before this came back. Try making it again." : e instanceof Error ? e.message : "Something went wrong.");
 
 export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: string; kitVersion?: number }) {
   const [kit, setKit] = useState<Kit | null>(null);
@@ -81,27 +52,20 @@ export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: st
   const [logoRaw, setLogo] = useState<string | null>(null);
   // A logo that would vanish on the kit's background is shown as a knockout.
   const logo = useLogoFor(logoRaw, kit?.tokensCss);
-  const [intent, setIntent] = useState<PostIntent>("promo");
+  const [format, setFormat] = useState<OutputFormat>("poster");
+  const [intent, setIntent] = useState<PostIntent | null>(null);
   const [goal, setGoal] = useState("");
   const [details, setDetails] = useState("");
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [left, setLeft] = useState<number>(LIMITS.postsPerSession);
+  const [made, setMade] = useState<Made[]>([]);
+  const [left, setLeft] = useState<number>(LIMITS.postersPerSession);
   const [busy, setBusy] = useState(false);
-  const [boldLeft, setBoldLeft] = useState<number>(LIMITS.boldPerSession);
-  const [postersLeft, setPostersLeft] = useState<number>(LIMITS.postersPerSession);
-  // The post the page is following: scrolled to when it starts, flagged with a pill when it's ready off screen.
-  const [follow, setFollow] = useState<string | null>(null);
-  const [readyOffscreen, setReadyOffscreen] = useState<string | null>(null);
-  const reduceMotion = () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const postEl = (id: string) => document.querySelector<HTMLElement>(`[data-post-id="${CSS.escape(id)}"]`);
-  const goTo = (id: string) => postEl(id)?.scrollIntoView({ behavior: reduceMotion() ? "auto" : "smooth", block: "start" });
 
   const loadKit = useCallback(async () => {
     setKitError(null);
     try {
       const k = await withFontFiles(sessionId, await call<Kit>("/api/kit/files", { sessionId }));
       setKit(k);
-      // Photos go into each post as data URLs, so the PNG export carries them too.
+      // Photos travel as data URLs, so the backup version's PNG export carries them too.
       const urls: Record<string, string> = {};
       for (const p of k.photos) {
         if (!p.uploadId) continue;
@@ -119,139 +83,42 @@ export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: st
     void loadKit();
   }, [loadKit]);
 
-  // The kit changed (a chat change, an answer): reload it, and restyle the posts already made
-  // with its new colors and fonts, so "make it neon pink" shows on the post you're looking at.
+  // The kit changed (a chat change, an answer): reload it, so the next output uses it.
   const [seenVersion, setSeenVersion] = useState(kitVersion);
   useEffect(() => {
     if (kitVersion === seenVersion) return;
     setSeenVersion(kitVersion);
     void loadKit();
   }, [kitVersion, seenVersion, loadKit]);
-  useEffect(() => {
-    if (!kit) return;
-    const to: Look = { tokensCss: kit.tokensCss, fontsHref: kit.fontsHref, wordmarkLines: kit.wordmarkLines, logoSrc: logo };
-    setPosts((ps) =>
-      ps.map((p) => {
-        if (!p.look || !p.preview || p.stage || sameLook(p.look, to)) return p;
-        const html = restyle(p.preview.html, p.look, to);
-        return { ...p, look: to, restyled: (p.restyled ?? 0) + 1, layoutNote: p.look.tokensCss === to.tokensCss && to.logoSrc && p.look.logoSrc !== to.logoSrc ? "Now signed with your logo." : "Restyled with your kit's new look.", preview: { ...p.preview, html } };
-      }),
-    );
-  }, [kit, logo]);
 
-  useEffect(() => {
-    if (!follow) return;
-    const t = setTimeout(() => goTo(follow), 120);
-    return () => clearTimeout(t);
-  }, [follow]);
-
-  // When the followed post finishes and it's out of view, a pill says so and takes you there.
-  const followed = posts.find((p) => p.id === follow);
-  const followedDone = !!followed && !followed.stage && !!(followed.preview || followed.error);
-  useEffect(() => {
-    if (!followedDone || !follow) return;
-    const el = postEl(follow);
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    if (r.bottom < 80 || r.top > window.innerHeight - 120) setReadyOffscreen(follow);
-    setFollow(null);
-  }, [followedDone, follow]);
-  useEffect(() => {
-    if (!readyOffscreen) return;
-    const el = postEl(readyOffscreen);
-    if (!el) return;
-    const io = new IntersectionObserver(([e]) => e?.isIntersecting && setReadyOffscreen(null), { threshold: 0.3 });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [readyOffscreen]);
-
-  const patch = (id: string, change: Partial<Post>) => setPosts((ps) => ps.map((p) => (p.id === id ? { ...p, ...change } : p)));
+  const patch = (id: string, change: Partial<Made>) => setMade((ms) => ms.map((m) => (m.id === id ? { ...m, ...change } : m)));
 
   async function make() {
     if (!kit) return;
     setBusy(true);
     const tempId = crypto.randomUUID();
     const brief = { goal: goal.trim(), details: details.trim() };
-    setPosts((ps) => [{ id: tempId, uid: tempId, intent, goal: brief.goal, stage: "Planning the post…" }, ...ps]);
-    // The new post lands below the form: bring it into view, so the wait is watched, not guessed at.
-    setFollow(tempId);
+    const chosen = format;
+    setMade((ms) => [{ id: tempId, uid: tempId, format: chosen, goal: brief.goal, stage: "Writing the words from your kit…" }, ...ms]);
     let id = tempId;
     try {
-      const planned = await call<{ postId: string; plan: { template: TemplateId; photo: string | null; angle: string; rationale: Note[] }; postsLeft: number }>("/api/posts", {
+      // The words come from the kit and the brief (plan, then write); the painter only paints them.
+      const planned = await call<{ postId: string; plan: { template: TemplateId; photo: string | null; angle: string; rationale: Note[] } }>("/api/posts", {
         sessionId,
         brand: "session",
-        intent,
+        // A post type is optional; without one, the copy is written as an announcement.
+        intent: intent ?? "announcement",
         brief,
       });
       id = planned.postId;
-      setPosts((ps) => ps.map((p) => (p.id === tempId ? { ...p, id } : p)));
-      setFollow((f) => (f === tempId ? id : f));
-      setLeft(planned.postsLeft);
+      setMade((ms) => ms.map((m) => (m.id === tempId ? { ...m, id } : m)));
       setGoal("");
       setDetails("");
-      patch(id, { stage: "Writing the copy…" });
-      // Writing a post twice returns the first answer, so a dropped connection is simply tried again.
-      const written = await callAgainIfDropped<{ template: TemplateId; photo: string | null; slots: Slots; rationale: Note[] }>("/api/posts/write", { sessionId, postId: id });
-
-      // The template version first, so there's a post on screen while the layout is designed.
-      const templates = parseTemplates(kit.templatesManifest);
-      const t = findTemplate(templates, written.template);
-      const look: PostLook = { tokensCss: kit.tokensCss, wordmarkLines: kit.wordmarkLines, logoSrc: logo, fontsHref: kit.fontsHref, base: { css: kit.baseCss } };
+      // Writing twice returns the first answer, so a dropped connection is simply tried again.
+      const written = await callAgainIfDropped<{ template: TemplateId; photo: string | null; slots: Slots }>("/api/posts/write", { sessionId, postId: id });
       const photoSrc = written.photo ? (photos[written.photo] ?? null) : null;
-      const chunkIds = new Set(Object.keys(kit.files).map((f) => f.replace(/\.(md|ya?ml|json|css)$/, "")));
-      const notes = (ns: Note[]) => ns.map((n) => ({ decision: n.decision.slice(0, 160) || "decision", choice: n.choice, reason: n.reason, chunks: n.cites.filter((c) => chunkIds.has(c)).slice(0, 6) }));
-      const planNotes = planned.plan.rationale.filter((n) => LAYOUT_NOTE.test(n.decision));
-      const alt = `${kit.businessName}: ${written.slots.headline ?? written.slots.quote ?? t.name}`.slice(0, 200);
-      const fileName = `${kit.businessName}-${intent}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 80);
-      const base = {
-        format: t.aspect,
-        html: buildPostPage({ templateHtml: kit.templates[t.id as TemplateId], look, slots: written.slots, photoSrc }),
-        alt,
-        rationale: notes([...planNotes, ...written.rationale]).slice(0, 16),
-        caption: written.slots.caption?.slice(0, 2200) || undefined,
-        fileName,
-      };
-      patch(id, { stage: "Designing the layout from your kit…", preview: base, look: { tokensCss: kit.tokensCss, fontsHref: kit.fontsHref, wordmarkLines: kit.wordmarkLines, logoSrc: logo } });
-
-      // The without-kit version, in parallel; the toggle appears when it lands.
-      void call<{ template: TemplateId | null; photo: string | null; slots: Slots | null; rationale: Note[] }>("/api/posts/baseline", { sessionId, postId: id })
-        .then((b) => {
-          if (!b.template || !b.slots) return;
-          const bt = findTemplate(templates, b.template);
-          const plain: PostLook = { tokensCss: kit.neutralTokensCss, wordmarkLines: [kit.businessName], base: { css: kit.baseCss } };
-          const baseline = {
-            format: bt.aspect,
-            html: buildPostPage({ templateHtml: kit.templates[bt.id as TemplateId], look: plain, slots: b.slots, photoSrc: b.photo ? (photos[b.photo] ?? null) : null }),
-            alt: `Without the kit: ${b.slots.headline ?? b.slots.quote ?? bt.name}`.slice(0, 200),
-            rationale: notes(b.rationale).slice(0, 16),
-            caption: b.slots.caption?.slice(0, 2200) || undefined,
-          };
-          setPosts((ps) => ps.map((p) => (p.id === id && p.preview ? { ...p, preview: { ...p.preview, baseline } } : p)));
-        })
-        .catch(() => {});
-
-      const composed = await composeWithChecks(sessionId, id, {
-        slots: written.slots,
-        aspect: t.aspect,
-        tokensCss: kit.tokensCss,
-        fontsHref: kit.fontsHref,
-        wordmarkLines: kit.wordmarkLines,
-        logoSrc: logo,
-        photo: photoSrc ? { src: photoSrc, alt } : null,
-        onStage: (stage) => patch(id, { stage }),
-      });
-      const copyNotes = written.rationale.filter((n) => !LAYOUT_NOTE.test(n.decision));
-      const bold = { aspect: t.aspect, slots: Object.fromEntries(TEXT_SLOTS.map((k) => [k, written.slots[k] ?? null])) as Record<TextSlot, string | null>, photo: photoSrc ? { src: photoSrc, alt } : null, copyNotes };
-      if (composed.page) {
-        const layoutNotes = composed.composition!.rationale.filter((n) => !RETRY_NOTE.test(n.decision.trim()));
-        setPosts((ps) =>
-          ps.map((p) =>
-            p.id === id && p.preview ? { ...p, stage: null, layoutNote: "Layout designed from your kit.", bold: { ...bold, quickPage: composed.page! }, preview: { ...p.preview, html: composed.page!, rationale: notes([...layoutNotes, ...copyNotes]).slice(0, 16) } } : p,
-          ),
-        );
-      } else {
-        patch(id, { stage: null, layoutNote: composed.why, bold: { ...bold, quickPage: base.html } });
-      }
+      const alt = `${kit.businessName}: ${written.slots.headline ?? written.slots.quote ?? ""}`.slice(0, 200);
+      patch(id, { stage: null, copy: { slots: Object.fromEntries(TEXT_SLOTS.map((k) => [k, written.slots[k] ?? null])) as Record<TextSlot, string | null>, photo: photoSrc ? { src: photoSrc, alt } : null } });
     } catch (e) {
       patch(id, { stage: null, error: messageOf(e) });
     } finally {
@@ -259,26 +126,12 @@ export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: st
     }
   }
 
-  /** The owner picked from the bold pass: that version becomes the post, with its own reasons. */
-  function choose(id: string, choice: BoldChoice) {
-    const chunkIds = new Set(Object.keys(kit?.files ?? {}).map((f) => f.replace(/\.(md|ya?ml|json|css)$/, "")));
-    setPosts((ps) =>
-      ps.map((p) => {
-        if (p.id !== id || !p.preview || !p.bold) return p;
-        const ns = [...(choice.candidate?.rationale ?? []), ...p.bold.copyNotes].map((n) => ({ decision: n.decision.slice(0, 160) || "decision", choice: n.choice, reason: n.reason, chunks: n.cites.filter((c) => chunkIds.has(c)).slice(0, 6) }));
-        const original = p.bold.original ?? { html: p.preview.html, rationale: p.preview.rationale };
-        const preview = choice.label === "quick" ? { ...p.preview, ...original } : { ...p.preview, html: choice.page, rationale: ns.slice(0, 16) };
-        return { ...p, preview, bold: { ...p.bold, original }, layoutNote: choice.label === "quick" ? "Kept as first made." : choice.candidate?.source === "sketch" ? "Bolder version, from a painted rough rebuilt with your kit." : "Bolder version, designed from your kit." };
-      }),
-    );
-  }
-
   const tooLong = charCount(goal) > LIMITS.messageChars || charCount(details) > LIMITS.messageChars;
 
   return (
     <section className="make-posts">
       <h2>
-        Make posts. <span>From your kit, with their reasons.</span>
+        Make something. <span>Painted from your kit, every word checked.</span>
       </h2>
       {kitError && (
         <p className="error">
@@ -294,7 +147,7 @@ export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: st
             <div>
               <p className="eyebrow">Your brand kit</p>
               <p>
-                {Object.keys(kit.files).length} files, ready to drop into any AI tool or hand to a freelancer. Posts below are made
+                {Object.keys(kit.files).length} files, ready to drop into any AI tool or hand to a freelancer. Everything below is made
                 from it.
               </p>
             </div>
@@ -308,67 +161,55 @@ export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: st
               void make();
             }}
           >
-            <div className="c-seg" role="radiogroup" aria-label="What kind of post">
+            <div className="output-picker" role="radiogroup" aria-label="What to make">
+              {OUTPUT_FORMATS.map((f) => (
+                <button key={f} type="button" role="radio" aria-checked={format === f} className="output-choice" onClick={() => setFormat(f)}>
+                  <span className="output-thumb" style={{ aspectRatio: OUTPUTS[f].css }} aria-hidden="true" />
+                  <b>{OUTPUTS[f].label}</b>
+                  <span className="muted small">{OUTPUTS[f].use}</span>
+                </button>
+              ))}
+            </div>
+            <label htmlFor="make-goal">What should it do?</label>
+            <input id="make-goal" value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Get people to the holiday listening party" />
+            <label htmlFor="make-details">The true details</label>
+            <textarea id="make-details" value={details} onChange={(e) => setDetails(e.target.value)} placeholder="The date, the time, the offer. Only what's true." />
+            <span className="muted small">What kind of piece, if it helps (optional)</span>
+            <div className="c-seg c-seg-optional" role="radiogroup" aria-label="What kind of piece (optional)">
               {POST_INTENTS.map((i) => (
-                <button key={i} type="button" role="radio" aria-checked={intent === i} onClick={() => setIntent(i)}>
+                <button key={i} type="button" role="radio" aria-checked={intent === i} onClick={() => setIntent(intent === i ? null : i)}>
                   {INTENT_LABEL[i]}
                 </button>
               ))}
             </div>
-            <label htmlFor="make-goal">What should this post do?</label>
-            <input id="make-goal" value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Get people to try the new seasonal menu" />
-            <label htmlFor="make-details">Details it needs</label>
-            <textarea id="make-details" value={details} onChange={(e) => setDetails(e.target.value)} placeholder="The offer, the date, the quote. Only what's true." />
             <div className="c-row-between">
               <span className="muted small">
-                {left} of {LIMITS.postsPerSession} posts left this session
+                {left} of {LIMITS.postersPerSession} left this visit
               </span>
               <button type="submit" aria-busy={busy} disabled={busy || !goal.trim() || tooLong || left <= 0}>
-                {busy ? "Making…" : "Make a post"}
+                {busy ? "Writing…" : `Make the ${OUTPUTS[format].label.toLowerCase()}`}
               </button>
             </div>
           </form>
 
-          {readyOffscreen && (
-            <button type="button" className="ready-pill" onClick={() => goTo(readyOffscreen)}>
-              <span className="working-dot" aria-hidden="true" />
-              Your post is ready ↓
-            </button>
-          )}
-
           <div className="posts-grid">
-            {posts.map((p) => (
-              <article key={p.uid} data-post-id={p.id} className="posts-item" data-restyled={p.restyled ? p.restyled % 2 : undefined} data-drafting={p.preview ? String(!!p.stage) : undefined}>
+            {made.map((m) => (
+              <article key={m.uid} data-post-id={m.id} className="posts-item">
                 <header>
-                  <span className="eyebrow">{INTENT_LABEL[p.intent]}</span>
-                  <p className="posts-goal">{p.goal}</p>
-                  {p.stage && <Working kind="making" lead={p.stage} />}
-                  {!p.stage && p.layoutNote && <p className="muted small">{p.layoutNote}</p>}
-                  {p.error && <p className="error small">{p.error}</p>}
+                  <span className="eyebrow">{OUTPUTS[m.format].label}</span>
+                  <p className="posts-goal">{m.goal}</p>
+                  {m.stage && <Working kind="making" lead={m.stage} />}
+                  {m.error && <p className="error small">{m.error}</p>}
                 </header>
-                {p.preview ? <PostPreview {...p.preview} /> : !p.error && <PostPreview format="1:1" html="<p></p>" alt="" rationale={[]} status="loading" />}
-                {kit && p.bold && !p.stage && (
-                  <BoldVersion
-                    sessionId={sessionId}
-                    postId={p.id}
-                    aspect={p.bold.aspect}
-                    quickPage={p.bold.quickPage}
-                    available={boldLeft > 0}
-                    onStart={() => setBoldLeft(0)}
-                    pageFor={(c) => buildComposedPage({ composition: { html: c.html, css: c.css }, slots: p.bold!.slots, aspect: p.bold!.aspect, tokensCss: kit.tokensCss, fontsHref: kit.fontsHref, wordmarkLines: kit.wordmarkLines, logoSrc: logo, photo: c.usesPhoto ? p.bold!.photo : null })}
-                    onChoose={(choice) => choose(p.id, choice)}
-                  />
-                )}
-                {kit && p.bold && !p.stage && (
+                {m.copy && (
                   <PosterCard
                     sessionId={sessionId}
-                    postId={p.id}
-                    aspect={p.bold.aspect}
+                    postId={m.id}
+                    format={m.format}
                     logo={logo}
-                    available={postersLeft > 0}
-                    onStart={() => setPostersLeft(0)}
+                    onStart={() => setLeft((n) => Math.max(0, n - 1))}
                     pageForB={(b) =>
-                      buildComposedPage({ composition: { html: b.html, css: b.css }, slots: p.bold!.slots, aspect: p.bold!.aspect, tokensCss: kit.tokensCss, fontsHref: kit.fontsHref, wordmarkLines: kit.wordmarkLines, logoSrc: logo, photo: b.usesPhoto ? p.bold!.photo : null }).replace("</head>", `<style>${PRINT_TEXTURE_CSS}</style></head>`)
+                      buildComposedPage({ composition: { html: b.html, css: b.css }, slots: m.copy!.slots, aspect: "1:1", tokensCss: kit.tokensCss, fontsHref: kit.fontsHref, wordmarkLines: kit.wordmarkLines, logoSrc: logo, photo: b.usesPhoto ? m.copy!.photo : null }).replace("</head>", `<style>${PRINT_TEXTURE_CSS}</style></head>`)
                     }
                   />
                 )}
@@ -379,56 +220,6 @@ export default function MakePosts({ sessionId, kitVersion = 0 }: { sessionId: st
       )}
     </section>
   );
-}
-
-// ---------- composing, with the browser-side check ----------
-
-type ComposeAnswer = { ok: boolean; errors: string[]; composition: Composition | null; aspect: "1:1" | "4:5"; attemptsLeft: number };
-
-async function composeWithChecks(
-  sessionId: string,
-  postId: string,
-  o: {
-    slots: Slots;
-    aspect: "1:1" | "4:5";
-    tokensCss: string;
-    fontsHref: string;
-    wordmarkLines: string[];
-    logoSrc: string | null;
-    photo: { src: string; alt: string } | null;
-    onStage: (s: string) => void;
-  },
-): Promise<{ page: string | null; composition: Composition | null; why: string }> {
-  const slots = Object.fromEntries(TEXT_SLOTS.map((s) => [s, o.slots[s] ?? null])) as Record<TextSlot, string | null>;
-  let issues: ProbeIssue[] = [];
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    let answer: ComposeAnswer;
-    try {
-      answer = await call<ComposeAnswer>("/api/posts/compose", { sessionId, postId, ...(issues.length ? { issues: issues.map(({ slot, code, n }) => ({ slot, code, ...(n === undefined ? {} : { n }) })) } : {}) });
-    } catch (e) {
-      const code = (e as ApiError).code;
-      if (code === "no_layout") return { page: null, composition: null, why: "Your kit has no layout chunk yet, so this post uses a standard layout." };
-      return { page: null, composition: null, why: "The custom layout didn't come through, so this post uses a standard layout." };
-    }
-    if (answer.ok && answer.composition) {
-      o.onStage("Checking the layout…");
-      const page = buildComposedPage({ composition: answer.composition, slots, aspect: o.aspect, tokensCss: o.tokensCss, fontsHref: o.fontsHref, wordmarkLines: o.wordmarkLines, logoSrc: o.logoSrc, photo: o.photo });
-      const found = await probe(page, o.aspect);
-      if (found === null) break; // Couldn't check it, so don't show it.
-      issues = found;
-      if (!issues.length) return { page, composition: answer.composition, why: "" };
-    } else {
-      issues = [];
-    }
-    if (answer.attemptsLeft <= 0) break;
-    o.onStage("Fixing the layout…");
-  }
-  return { page: null, composition: null, why: "The custom layout didn't pass its checks (text fit, contrast, nothing on the photo), so this post uses a standard layout." };
-}
-
-/** Renders a composed post in a hidden frame and runs the layout probe on it (app/lib/render-post.ts). */
-async function probe(html: string, aspect: "1:1" | "4:5"): Promise<ProbeIssue[] | null> {
-  return (await renderPost(html, aspect))?.issues ?? null;
 }
 
 function dataUrl(blob: Blob): Promise<string> {

@@ -44,16 +44,16 @@ export const LIMITS = {
   boldDirections: 2,
   /** One render the browser sends to the critic: a JPEG about 540 px wide is plenty to judge. */
   boldRenderBytes: 400 * 1024,
-  /** Posters per session (Scott, Nov 27): one, painted by the image model and checked in code. */
-  postersPerSession: 1,
-  /** Paints per poster: the first, plus one repaint told what failed. Then the B fallback. */
-  posterPaints: 2,
+  /** Painted outputs per session (poster, story or Instagram post), each checked in code. Three since every output is painted (build plan, Nov 27). */
+  postersPerSession: 3,
+  /** Paints per output: a quick first look and the final painted side by side, then one repaint of the final told what failed. Then the B fallback. */
+  posterPaints: 3,
   sessionHours: 24,
   liveSessionsPerIpPerDay: 3,
 
   /** Default daily tripwire in dollars; DAILY_SPEND_CAP_USD overrides it. */
-  /** Raised from 1.50 for posters (Scott, Nov 27). */
-  dailySpendCapUsd: 5,
+  /** Raised from 1.50 for posters, then to 10 when every output is painted (Scott, Nov 27). */
+  dailySpendCapUsd: 10,
 } as const;
 
 export const POST_INTENTS = ["promo", "announcement", "event", "testimonial", "tip"] as const;

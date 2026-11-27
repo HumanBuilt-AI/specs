@@ -41,7 +41,7 @@ Add each of these. For the ones marked secret, tick **Contains secret values**, 
 | `TURNSTILE_SECRET_KEY` | The Turnstile **Secret key** from step 2 | Yes, Functions only |
 | `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | The Turnstile **Site key** from step 2. This one is meant to be public. | No |
 | `GENERATION_ENABLED` | `true`. Set it to `false` any time to switch off every paid call (the kill switch). | No |
-| `DAILY_SPEND_CAP_USD` | `5` (raised from 1.50 for posters, Nov 27). Generation closes for the day once this much has been spent. | No |
+| `DAILY_SPEND_CAP_USD` | `10` (raised to 5 for posters, then 10 when every output is painted, Nov 27). Generation closes for the day once this much has been spent. | No |
 | `GEMINI_API_KEY` | Optional (added Nov 6). A Gemini API key from Google AI Studio, on a project with billing on. With it, the bold pass ("Make it bolder") adds an image-model rough for loud brands; without it, the bold pass runs on Claude alone. Use a separate key from the one in your Mac's `.env`, and set a budget alert in Google Cloud Billing. | Yes, Functions only |
 | `OPENAI_API_KEY` | Optional (added Nov 27). An OpenAI API key for posters: the image model paints the poster, then Claude checks every word, the logo and the photo. Without it, "Make a poster" is off. Set a monthly budget on the OpenAI project. | Yes, Functions only |
 | `IP_HASH_SALT` | Any long random string; mash the keyboard for 30 or so characters. It scrambles visitors' IP addresses before they're stored for the rate limit. | Yes, Functions only |
@@ -65,7 +65,7 @@ The gate is that the deployed site refuses raw prompts, over-cap uploads, and pa
 2. To trip the cap for real, in Netlify set `DAILY_SPEND_CAP_USD` to `0.30` and redeploy (step 3.7).
 3. Open `https://something.netlify.app/live`, pass the bot check, start a session, and make posts until the page says the spending cap is reached. That's two or three posts, about 30 cents.
 4. Run `npm run gate -- https://something.netlify.app` again. Now the tripwire lines run too, and the last line should read **Phase 3 gate: all checks passed.**
-5. Set `DAILY_SPEND_CAP_USD` back to `5` and redeploy.
+5. Set `DAILY_SPEND_CAP_USD` back to `10` and redeploy.
 
 To see the kill switch work, set `GENERATION_ENABLED` to `false`, redeploy, and reload `/live`: it says live generation is switched off.
 

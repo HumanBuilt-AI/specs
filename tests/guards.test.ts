@@ -208,7 +208,7 @@ test("settings fail closed", () => {
   assert.equal(readSettings({ GENERATION_ENABLED: "true" }).generationEnabled, true);
   assert.equal(readSettings({ GENERATION_ENABLED: "True " }).generationEnabled, true);
   assert.equal(readSettings({ GENERATION_ENABLED: "on" }).generationEnabled, false);
-  assert.equal(readSettings({}).dailyCapUsd, 5);
+  assert.equal(readSettings({}).dailyCapUsd, 10);
   assert.equal(readSettings({ DAILY_SPEND_CAP_USD: "lots" }).dailyCapUsd, 0);
   assert.equal(readSettings({ DAILY_SPEND_CAP_USD: "-1" }).dailyCapUsd, 0);
 });
